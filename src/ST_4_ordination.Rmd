@@ -1,0 +1,1115 @@
+---
+title: "ST_4_ordination"
+author: "Sean Swift"
+date: "February 6, 2020"
+output: 
+  html_document:
+        toc: true
+        toc_depth: 4
+        number_sections: true
+
+---
+
+# Description
+ST_ordination focuses on plots related to ordination based on community dissimilarity.
+Ordination plots are accompanied by heat maps, when possible.
+These ordinations often require data transformation, so there's some of that too. 
+Mostly using package phyloseq. Also using speedyseq when available.
+
+TODO: 
+
+  * Re-do ordinations with unifrac. To get tree and re-calculate, will need to re-pipeline the data.
+  * Make heatmaps
+  * Other types of ordination?
+  * Mantel test
+  * pull out the bugs responsible for each of the strong spatial gradients (this is just anecdotal at this point). 
+  * make similar plots to those in ST_model with the subset axis 1 nmds values (probably within each sample type). Visualize bugs that have the strongest slopes and most significant slopes with NMDS Axis 1, which will be the “drivers” of that aspect of the ordination in each case.
+
+
+# Setup
+## Import data and create phyloseq object
+Reading in the data. 
+
+Start by reading in the microbial sequencing data.
+Data consists of a list of dataframes: sample metadata, sequence abundance, and microbial taxonomy
+
+```{r setup}
+# load libraries
+## analysis
+library(phyloseq)
+library(speedyseq)
+library(vegan)
+## plotting
+library(gridExtra)
+library(ggplot2)
+library(viridisLite)
+## utility
+library(dplyr)
+library(data.table)
+library(usedist)
+
+# set seed
+
+set.seed( 100 )
+
+
+# read in microbial data
+source("src/make_phyloseq.R")
+ST_16S <- readRDS("data/processed/cleaned/ST_16S_spatial.rds")
+
+# make phyloseq object
+ST_16S_phy  <- make_phyloseq(ST_16S)
+ST_16S_phy  <- subset_samples(ST_16S_phy, sample_type != "PlantShoot")
+
+# summit water had duplicate filters, discard one set
+
+ST_16S_phy  <- subset_samples(ST_16S_phy, !(sample_barcode %in% c(2281, 2273, 2265,2257,2249,2241,2233, 2225, 2217)))
+
+rm(ST_16S)
+
+```
+
+Next, read in the metabolite data.
+Two data frames: chemical abundances, sample metadata
+
+```{r}
+# read in metabolite data
+read_metabolite <-
+  function(data_input = "data/raw/metabolite/Waimea_AllSamples_Relativized.csv",
+           meta_input = "data/raw/sample/MS_samples_waimea_supertransect - Full Metadata Waimea_Supertransect.csv") {
+  
+    
+  # read in sample metadata
+  meta <- fread(input = meta_input)
+  
+  
+  # read raw data  
+  chem <- fread(input = data_input)
+  
+  # pull out feature names (first column)
+  
+  chem_features <- chem[[1]]
+  
+  # drop feature names column from table
+  chem[, sample_name := NULL]
+  
+  # pull out sample names (column names) and extract 4 digit barcode
+  chem_samples  <- sub(".*(\\d{4}).*","\\1",colnames(chem))
+  
+  # print warning if samples don't match the barcode pattern
+  if(  !all(  grepl("\\d{4}", chem_samples)  )  ){
+  warning("Some samples are missing a barcode and will be dropped:")
+  print(chem_samples[!grepl("\\d{4}",chem_samples)])
+  
+  # drop those samples from the data set
+  chem <- chem[ ,grepl("\\d{4}", chem_samples), with = F]
+  
+  }
+  chem_samples  <- sub(".*(\\d{4}).*","\\1",colnames(chem))
+  
+  # reassign names
+  chem <- as.matrix(chem)
+  row.names(chem) <-   as.character(chem_features)
+  colnames(chem)  <-   chem_samples
+  
+
+  
+  data_list <- list(meta, chem)
+  names(data_list) <- c("metadata","abundance")
+  
+  return(data_list)
+  }
+  
+
+ST_chem <- read_metabolite()
+
+# read in metabolite sample metadata
+
+
+# make chemistry phyloseq object
+make_chem_phyloseq <-
+  function(chem_data = ST_chem, id_column = "sample_barcode") {
+    # make 'otu table' out of chemical abundance
+    abund_phy <- otu_table(chem_data$abundance, taxa_are_rows = T)
+    
+    samples <- chem_data$metadata
+    
+    sample_names <- samples[[id_column]]
+    
+    sample_phy <- sample_data(samples)
+    sample_names(sample_phy) <- sample_names
+    
+    phy <- phyloseq(abund_phy, sample_phy)
+    
+    return(phy)
+}
+
+ST_chem_phy <- make_chem_phyloseq()
+
+rm(ST_chem)
+
+
+```
+
+## Match up the samples
+Some samples are exclusive to microbial dataset and some are exclusive to the metabolite data set. 
+
+List the samples that differ between the data sets. 
+We might try to recover some of this data, but for now, just drop everything that doesn't match.
+
+```{r}
+# find mismatches
+DNA_sample_bcodes <- ST_16S_phy@sam_data$sample_barcode
+print( paste("Total DNA samples = ", length(DNA_sample_bcodes)))
+
+MS_sample_bcodes  <- ST_chem_phy@sam_data$sample_barcode
+print( paste("Total MS samples = ", length(MS_sample_bcodes)))
+
+MS_no_DNA <- ST_chem_phy@sam_data[ ! (ST_chem_phy@sam_data$DNA_barcode %in% DNA_sample_bcodes) ] %>%
+  as.matrix() %>%
+  as.data.frame()
+
+print( paste("In MS data, but not in DNA = ", nrow(MS_no_DNA) ))
+
+DNA_no_MS <- ST_16S_phy@sam_data[ ! (ST_16S_phy@sam_data$MS_barcode %in% MS_sample_bcodes)]%>%
+  as.matrix() %>%
+  as.data.frame()
+
+print( paste("In DNA data, but not in MS = ", nrow(DNA_no_MS)))
+
+
+# subset both datasets
+ST_chem_phy <- subset_samples(ST_chem_phy, DNA_barcode %in% ST_16S_phy@sam_data$sample_barcode)
+
+ST_16S_phy  <- subset_samples(ST_16S_phy, sample_barcode %in% ST_chem_phy@sam_data$DNA_barcode)
+
+# check number samples in both data sets
+nsamples(ST_chem_phy)
+nsamples(ST_16S_phy)
+
+# switch DNA samples over to MS barcodes so everything is unified
+## pull out otu table and sample data
+otus    <- ST_16S_phy@otu_table
+samples <- ST_16S_phy@sam_data
+taxa    <- ST_16S_phy@tax_table
+
+## change sample ids to ms barcodes
+samples$sequence_id <-row.names(samples)
+row.names(samples) <- samples$MS_barcode
+colnames(otus)     <- samples$MS_barcode
+
+ST_16S_phy  <- phyloseq(samples, otus, taxa)
+
+rm(samples, otus, taxa)
+
+## check that names match
+if (all( sample_names(ST_16S_phy) %in% sample_names(ST_chem_phy) ) ){
+  message("MS and DNA sample names match")
+} else (
+  warning("MS and DNA sample names are different")
+)
+
+
+```
+
+
+
+
+## Read in unifrac distances
+Distances are saved as a lower triangular matrix.
+Need to import, arrange, mirror, and convert to distance matrix.
+
+```{r import_unifrac}
+# Read in unifrac distances
+read_dist_file <- function(file = "data/raw/sequence/all_unifrac_100.unweighted.dist", sample_id_column = NULL, reference_physeq = NULL ){
+x <- scan(file)
+x <- x[-1]
+
+# make empty matrix
+m <- matrix(NA, 474,474)
+
+# fill lower triangle
+m[upper.tri(m, diag = F)] <- x
+
+# pull out sample names
+samp_names <- m[1,2:ncol(m)] %>% as.integer()
+
+# delete from matrix
+m <- m[-1,-1]
+
+# add diagonal 
+diag(m) <- signif(0.00, digits =4)
+
+# fill out matrix
+makeSymm <- function(m) {
+   m[lower.tri(m)] <- t(m)[lower.tri(m)]
+   return(m)
+}
+m <- makeSymm(m)
+
+# add sample names back in
+colnames(m) <- samp_names
+row.names(m) <- samp_names
+
+if(!is.null(sample_id_column)){
+  dat <- sample_data(reference_physeq)
+  ids <- dat[[sample_id_column]]
+  new_ids <- row.names(dat)
+  
+  m <- m[ids,ids]
+  colnames(m)  <- new_ids
+  row.names(m) <- new_ids
+  
+}
+
+
+
+
+return(m)
+}
+
+m <- read_dist_file(file = "data/raw/sequence/all_unifrac_100.unweighted.dist", sample_id_column = "sequence_id", reference_physeq = ST_16S_phy)
+
+
+
+# function for subsetting the distance matrix
+get_unifrac <- function(physeq, unifrac_matrix = m){
+  # this function subsets unifrac matrix columns and rows by set of ids
+  
+  # use sample names from phyloseq object
+  ids <- sample_names(physeq)
+  new_ids = ids
+  
+  
+  if( ! ( all ( ids %in% colnames( unifrac_matrix )))){
+    
+    warning("Not all ids are in the distance matrix")
+    print(ids[! ( ids %in% colnames(unifrac_matrix) ) ])
+    
+  } else {
+  
+  dist_obj <-as.dist(unifrac_matrix[ids,ids])
+    
+
+  return(dist_obj)
+  }
+}
+
+# Get unifrac distances from file
+ST.uni <- get_unifrac(ST_16S_phy)
+
+
+```
+
+## Set up ggplot
+```{r ggplot}
+theme_set(theme_bw())
+
+pal_d = "Paired"
+scale_colour_discrete <-  function(palname=pal_d, ...){
+  scale_colour_brewer(palette=palname, ...)
+}
+scale_fill_discrete <-  function(palname=pal_d, ...){
+    scale_fill_brewer(palette=palname, ...)
+}
+
+pal_c = "C"
+
+uniform_gradient_color <- function(palname = pal_c){
+  scale_color_viridis_c(option = palname)
+}
+
+# Can change these settings with viridis package
+# With colour brewer, need add a line to each plot for continuous colors
+# "scale_color_gradient2(low = "green", mid = "blue", high = "red")"
+
+#  scale_colour_continuous <-  function(palname=pal_c, ...){
+#    scale_colour_brewer(palette=palname, ...)
+#  }
+# # 
+#  scale_fill_continuous <-  function(palname=pal_c, ...){
+#    scale_fill_brewer(palette=palname, ...)
+#  }
+
+```
+
+# Write out data to files
+Before going further, write out the data tables used for subsequent analyses to files.
+
+```{r}
+# write out all data up to this point
+
+## 16S data
+# write.csv(otu_table(ST_16S_phy), "data/processed/MSand16S/ST_correlation_otu_table.csv", row.names = T)
+# write.csv(tax_table(ST_16S_phy), "data/processed/MSand16S/ST_correlation_tax_table.csv", row.names = T)
+# write.csv(sample_data(ST_16S_phy), "data/processed/MSand16S/ST_correlation_otu_sample_data.csv", row.names = T)
+# write.csv(as.matrix(ST.uni), "data/processed/MSand16S/ST_correlation_unifrac_dist.csv", row.names = T)
+# 
+# ## MS data
+# write.csv(otu_table(ST_chem_phy), "data/processed/MSand16S/ST_correlation_MS_table.csv", row.names = T)
+# write.csv(sample_data(ST_chem_phy), "data/processed/MSand16S/ST_correlation_MS_sample_data.csv", row.names = T)
+```
+
+
+# NMDS
+
+## Do some broad strokes ordination
+
+### All Samples
+To start, NMDS of all samples, all OTUs (no additional filtering), Unifrac dissimilarity. 
+
+```{r allNMDS, echo = F, message=F, results='hide'}
+
+# ordinate microbial using unifrac distances
+
+ST.ord <- ordinate(ST_16S_phy, "NMDS", ST.uni)
+
+# ordinate metabolite samples
+
+ ## from phyloseq source code, import veganifyOTU function
+  veganifyOTU <- function(physeq){
+  if(taxa_are_rows(physeq)){physeq <- t(physeq)}
+  return(as(otu_table(physeq), "matrix"))
+  }
+
+
+ST_chem.ord <- ordinate(ST_chem_phy, "NMDS", distance = "bray")
+
+
+
+# Colors
+
+#### by habitat
+
+# microbes
+all_micro_habitat <- plot_ordination(ST_16S_phy, ST.ord, type="samples", color = "habitat", shape = "host")
+all_micro_habitat <- all_micro_habitat + scale_shape_discrete(solid = T)
+all_micro_habitat
+
+
+# write to png
+ggsave("outputs/figures/microbe_all_samples_habitat_nmds.png")
+
+# metabolites
+all_chem_habitat <- plot_ordination(ST_chem_phy, ST_chem.ord, type="samples", color = "habitat", shape = "host")
+all_chem_habitat <- all_chem_habitat + scale_shape_discrete(solid = T)
+all_chem_habitat
+
+ggsave("outputs/figures/metabolite_all_samples_habitat_nmds.png")
+
+#### by transect
+
+# microbes
+all_micro_elevation <- plot_ordination(ST_16S_phy, ST.ord, type="samples", color = "elevation", shape = "host")
+all_micro_elevation <- all_micro_elevation + scale_shape_discrete(solid = T) + uniform_gradient_color()
+all_micro_elevation
+
+ggsave("outputs/figures/microbe_all_samples_distance_nmds.png")
+
+# metabolites
+all_chem_elevation <- plot_ordination(ST_chem_phy, ST_chem.ord, type="samples", color = "elevation", shape = "host")
+all_chem_elevation <- all_chem_elevation + scale_shape_discrete(solid = T) + uniform_gradient_color()
+all_chem_elevation
+
+# write to png
+ggsave("outputs/figures/metabolite_all_samples_distance_nmds.png")
+
+rm(ST.ord)
+rm(ST_chem.ord)
+```
+
+
+
+### Ordinations For Manuscript
+Craig's Request: 
+
+3 panels across: Microbiome, Metabolome, Procrustes match
+And 6 panels down, something like:
+- All samples
+- Marine Samples
+- Soils and Sediments (Terrestrial)
+- Plants (perhaps just rhizosphere)
+- Water
+- Insects
+
+First, let's make a function to do the plotting:
+
+```{r}
+# function paired_nmds will plot nmds for microbial and metabolite data and return a list of plots
+
+paired_ordination <- function(microbe_phy,
+                              chem_phy, description = NULL,
+                              method = "MDS", 
+                              chem_dist = "bray", 
+                              microbe_dist = "Unifrac",
+                              color = "shore_dist",
+                              shape = "host")
+  {
+  # Ordinations #
+  
+  # Microbe 
+  micro_dat <- sample_data(microbe_phy)
+  
+  ## distance
+  if(microbe_dist == "Unifrac"){
+     ST.dist <- get_unifrac(microbe_phy)
+     
+  } else(
+    ST.dist <- vegdist(veganifyOTU(microbe_phy), method = microbe_dist)
+  )
+  
+  ## ordinate
+  message("Ordinating microbes")
+  ST.ord <- ordinate(microbe_phy, method = method, ST.dist)
+  
+  # plot microbe ordination
+  p_micro = plot_ordination(
+  microbe_phy,
+  ST.ord,
+  type = "samples",
+  color = color,
+  shape = shape,
+  title = paste(method, "Microbe", microbe_dist, description, "Samples", sep = ", ")
+  )
+  
+  # scale point shapes
+  p_micro <- p_micro + scale_shape_discrete(solid = T) 
+  
+  # if color is continuous, set uniform gradient color
+  if(is.numeric(micro_dat[[color]]) | is.integer(micro_dat[[color]])){
+    p_micro <- p_micro + uniform_gradient_color()
+  }
+  
+  print(p_micro)
+  
+  
+  # Metabolite
+  chem_dat <- sample_data(chem_phy) 
+  
+  ## distance
+  ST_chem.dist <- vegdist(veganifyOTU(chem_phy), method = chem_dist)
+
+  ## ordinate
+  message("Ordinating metabolites")
+  
+  if(method == "NMDS"){
+   # implements distance calculations internally
+   ST_chem.ord <- ordinate(chem_phy, method = method, chem_dist)
+  } else{
+   ST_chem.ord <- ordinate(chem_phy, method = method, ST_chem.dist)
+  }
+
+  # plot metabolite ordination
+  p_chem = plot_ordination(
+  chem_phy,
+  ST_chem.ord,
+  type = "samples",
+  color = color,
+  shape = shape,
+  title = paste(method, "Metabolite", chem_dist, description, "Samples", sep = ", ")
+  )
+  
+  ## scale point shapes
+  p_chem <- p_chem + scale_shape_discrete(solid = T) 
+  ## if color is continuous, set uniform gradient color
+  
+    if(is.numeric(chem_dat[[color]]) | is.integer(chem_dat[[color]])){
+    p_chem <- p_chem + uniform_gradient_color()
+    }
+  
+  print(p_chem)
+  
+  
+  # Combined Analysis #
+  
+  # Mantel
+  message("Calculating Mantel")
+  
+  ## arrange MS distance matrix to match the microbe sample order
+   ids <- colnames(ST.dist)
+   chem_dist_mat <- ST_chem.dist %>% as.matrix()
+   chem_dist_mat <- chem_dist_mat[ids, ids]
+   chem_dist <- as.dist(chem_dist_mat)
+  
+  ## calculate mantel stat
+   mant_score <- mantel(ST.dist, ST_chem.dist)
+   
+  
+   
+  # Procustes
+  message("Procruste rotation") 
+    ## pull out ordination point coordinates and join to metadata
+  
+  pull_vec <- function(ord, metadata) {
+    ord_dt        <- ord$vectors %>% as.data.frame()
+    ord_dt$safe_id   <- row.names(ord$vectors)
+    
+    metadata$safe_id <- row.names(metadata)
+    ord_dt <-left_join(ord_dt, metadata, by = "safe_id")
+    ord_dt <- as.data.table(ord_dt)
+    setkey(ord_dt, safe_id)
+    setorder(ord_dt, safe_id)
+    return(ord_dt)
+  }
+  
+  # data table of microbe ordination
+  ord_micro.dt <- pull_vec(ST.ord, micro_dat)
+  # data table of chem ordination
+  ord_chem.dt <- pull_vec(ST_chem.ord, chem_dat)
+  
+   ## calculate procustes
+  proc <- ade4::procuste(dfX = ord_micro.dt[, list(Axis.1, Axis.2)],
+                         dfY = ord_chem.dt[, list(Axis.1, Axis.2)])
+ 
+  
+  # add new procustes coords to data tables
+  ord_micro.dt[, c("proc.x","proc.y") := proc$tabX]
+  ord_chem.dt[, c("proc.x","proc.y") := proc$tabY]
+  
+  ord_micro.dt[, data_type := "Microbes"]
+  ord_chem.dt[, data_type := "Metabolites"]
+  
+  cols_to_keep <- c("proc.x", "proc.y", "safe_id", "habitat", "sample_type","trophic","host","shore_dist", "data_type")
+  
+  ord_comb.dt <- rbindlist(list(ord_micro.dt[, cols_to_keep, with = F],
+                                ord_chem.dt[, cols_to_keep, with = F]))
+  ord_comb.dt$plot_color <- ord_comb.dt[[color]]
+  
+  p_proc <- ggplot(ord_comb.dt, aes(proc.x, proc.y,
+                          color = plot_color,
+                          shape = data_type)) +
+   
+                          geom_point(size = 1) +
+                          geom_line(aes(group = safe_id), color = "gray", alpha = 0.3)+
+                          labs(title = paste(description, ": Procruste Rotation of Ordinations"),
+                                  caption = paste("Mantel Statistic = ", round(mant_score$statistic, 3),
+                                                  "Mantel Significance = ", round(mant_score$signif, 3)),
+                               x = "",
+                               y = ""
+                                  )
+  if(is.numeric(ord_comb.dt$plot_color) | is.integer(ord_comb.dt$plot_color)){
+      p_proc <- p_proc + uniform_gradient_color()
+  }
+                  
+  print(p_proc)
+  # return plots as list
+  
+  plot_list <- list(p_micro,p_chem, p_proc)
+  names(plot_list) <- c( "micro", "chem", "proc")
+  return(plot_list)
+  
+}
+
+```
+
+Now run the plotting function on the data subsets
+
+
+```{r}
+# Initialize plot list
+p <- list()
+
+# All samples
+p$all <- paired_ordination(
+                    microbe_phy = ST_16S_phy,
+                    chem_phy = ST_chem_phy,
+                    description = "All",
+                    shape = "habitat",
+                    color = "sample_type"
+                    )
+
+# Marine
+ST  <- subset_samples(ST_16S_phy, habitat == "Marine")
+ST  <- prune_taxa(taxa_sums(ST) > 0, ST)
+
+ST_chem <- subset_samples(ST_chem_phy, habitat == "Marine")
+ST_chem <- prune_taxa(taxa_sums(ST_chem) > 0, ST_chem)
+
+p$marine <- paired_ordination(ST, ST_chem, description = "Marine", color = "sample_type")
+
+
+
+# Soils and Sediments
+ST  <- subset_samples(ST_16S_phy,
+                      habitat != "Marine" &
+                        sample_type %in% c("SoilShallow", "SoilDeep", "Sediment"))
+ST  <- prune_taxa(taxa_sums(ST) > 0, ST)
+
+ST_chem <- subset_samples(ST_chem_phy,
+                          habitat != "Marine" &
+                            sample_type %in% c("SoilShallow", "SoilDeep", "Sediment"))
+ST_chem <- prune_taxa(taxa_sums(ST_chem) > 0, ST_chem)
+
+p$soil_sed <-paired_ordination(ST, ST_chem, "Soil & Sediment")
+
+
+# Plant Roots
+ST  <- subset_samples(ST_16S_phy, sample_type %in% c("PlantRoot"))
+ST  <- prune_taxa(taxa_sums(ST) > 0, ST)
+
+ST_chem <- subset_samples(ST_chem_phy, sample_type %in% c("PlantRoot"))
+ST_chem <- prune_taxa(taxa_sums(ST_chem) > 0, ST_chem)
+
+p$plant_roots <-paired_ordination(ST, ST_chem, "Plant Roots")
+
+# Water
+
+ST  <- subset_samples(ST_16S_phy, sample_type %in% c("WaterNonSaline"))
+ST  <- prune_taxa(taxa_sums(ST) > 0, ST)
+
+ST_chem <- subset_samples(ST_chem_phy, sample_type %in% c("WaterNonSaline"))
+ST_chem <- prune_taxa(taxa_sums(ST_chem) > 0, ST_chem)
+
+p$water <- paired_ordination(ST, ST_chem, description = "WaterNonSaline")
+
+# Inverts
+
+ST  <- subset_samples(ST_16S_phy, sample_type %in% c("Drosophila", "Mosquito"))
+ST  <- prune_taxa(taxa_sums(ST) > 0, ST)
+
+ST_chem <- subset_samples(ST_chem_phy, sample_type %in% c("Drosophila", "Mosquito"))
+ST_chem <- prune_taxa(taxa_sums(ST_chem) > 0, ST_chem)
+
+p$invert <- paired_ordination(ST, ST_chem, description = "Invert")
+
+```
+
+Now that we have the plots, facet them in the correct order.
+
+
+```{r}
+grid.arrange(p$all$micro        , p$all$chem,         p$all$proc,
+               p$marine$micro     , p$marine$chem,      p$marine$proc,
+               p$soil_sed$micro   , p$soil_sed$chem,    p$soil_sed$proc,
+               p$plant_roots$micro, p$plant_roots$chem, p$plant_roots$proc,
+               p$water$micro      , p$water$chem,       p$water$proc,
+               p$invert$micro     , p$invert$chem,      p$invert$proc,
+               nrow = 6, ncol = 3
+             )
+
+g <-arrangeGrob(p$all$micro        , p$all$chem,         p$all$proc,
+                 p$marine$micro     , p$marine$chem,      p$marine$proc,
+                 p$soil_sed$micro   , p$soil_sed$chem,    p$soil_sed$proc,
+                 p$plant_roots$micro, p$plant_roots$chem, p$plant_roots$proc,
+                 p$water$micro      , p$water$chem,       p$water$proc,
+                 p$invert$micro     , p$invert$chem,      p$invert$proc,
+                 nrow = 6, ncol = 3)
+
+ggsave("outputs/figures/combined_microbe_metabolite_mds.png", g, width = 15, height = 20)
+```
+
+
+
+### Just Host Associated
+```{r}
+ST  <- subset_samples(ST_16S_phy, host != "Nonhost")
+ST  <- prune_taxa(taxa_sums(ST) > 0, ST)
+
+ST_chem <- subset_samples(ST_chem_phy, host != "Nonhost")
+ST_chem <- prune_taxa(taxa_sums(ST_chem) > 0, ST_chem)
+
+# ordinate
+ST.uni <- get_unifrac(ST)
+ST.ord <- ordinate(ST, "NMDS", ST.uni)
+
+ST_chem.ord <- ordinate(ST_chem,"NMDS", distance = "bray")
+
+# by sample
+p = plot_ordination(ST, ST.ord, type="samples", color = "habitat", shape = "host", title="NMDS, Microbe, Unifrac, Transect Samples, All OTUs")
+p + scale_shape_discrete(solid = T)
+
+p = plot_ordination(ST_chem, ST_chem.ord, type="samples", color = "habitat", shape = "host", title="NMDS, Metabolite, Bray, Transect Samples, All OTUs")
+p + scale_shape_discrete(solid = T)
+
+```
+
+
+### Transect Samples
+Take a closer look at transect samples (no marine samples).
+
+
+```{r transectNMDS, echo = F, message=F, results='hide'}
+# transform to relative abundance
+#ST_rel <-transform_sample_counts(ST_16S_phy, function(x) x / sum(x) )
+
+
+# subset to just transect samples
+ST  <- subset_samples(ST_16S_phy, habitat != "Marine")
+ST  <- prune_taxa(taxa_sums(ST) > 0, ST)
+
+# get unifrac distances
+
+ST.uni <- get_unifrac(ST)
+
+# write out for craig
+
+  # write.csv(ST@otu_table,"outputs/transects_data/ST_transects_esv_table.csv")
+  # write.csv(ST@sam_data, "outputs/transects_data/ST_transects_sample_table.csv")
+  # write.csv(ST@tax_table, "outputs/transects_data/ST_transects_taxonomy_table.csv")
+  # write.csv(as.data.frame(as.matrix(ST.uni)), "outputs/transects_data/ST_transects_unweighted_unifrac.csv")
+
+
+#################################################################
+## ST is the phyloseq object containing just transect samples! ##
+#################################################################
+
+# ordinate
+
+ST.ord <- ordinate(ST, "NMDS", ST.uni)
+
+# by sample
+p = plot_ordination(ST, ST.ord, type="samples", color = "sample_type", shape = "host", title="NMDS, Unifrac, Transect Samples, All OTUs")
+p + scale_shape_discrete(solid = T) 
+
+# by transect
+p = plot_ordination(ST, ST.ord, type="samples", color = "transect_name", shape = "host", title="NMDS, Unifrac, Transect Samples, All OTUs")
+p + scale_shape_discrete(solid = T) 
+
+rm(ST.ord)
+rm(ST.uni)
+```
+
+#### Separate Ordinations By Host Type
+
+```{r hostNMDS, echo = F, message=F, results='hide'}
+# loop through and ordinate all host types
+
+host_types <- unique(ST@sam_data$host)
+for ( type in host_types ){
+  # subset and ordinate
+  ST_sub <- subset_samples(ST, host == type)
+  ST.uni <- get_unifrac(ST_sub)
+  ST.ord <- invisible(ordinate(ST_sub, "NMDS", "bray"))
+  
+  #plot
+  p <- plot_ordination(ST_sub, ST.ord, type="samples", color = "shore_dist", shape = "sample_type", title= paste("NMDS, Unifrac,",type))
+  p <- p +
+    uniform_gradient_color() +
+    scale_shape_discrete(solid = T)
+    
+  print(p)
+}
+
+
+```
+
+#### Separate Ordinations By Sample Type
+Based on the previous ordinations, we can see strong separation between habitats (marine, terrestrial, stream) and hosts (plants, animals, environment). 
+
+There also appears to be a strong gradient along the transect for enviromnental samples. For animals, this trend is not very apparent.
+
+Ordinating each sample type separately removes sample type as a source of community variation in the plot.
+Separation along the transect gradient becomes much more obvious for the environmental sample types as well as plant roots.
+
+
+For terrestrial environmental samples (soils and plant roots), correlation between NMDS1 and the gradeint is extremely linear along the transect gradient. For the stream samples (water and sediment), the relationship is relatively linear, with extreme values near to shore. Possibly, there is a salient gradient in the near shore estuary driving more extreme community changes for stream sample types. 
+
+
+Drosophila shows a significant, but weaker trend (both in slope and model fit). 
+Mosquitoes (non-blooded females) show no trend along the gradient. 
+
+Maybe for drosophila, the effects of homeostasis and strictly herbivorous diet result in the weaker trend.
+Mosquitoes are also plant feeders and were sorted to ensure only non-blooded females were collected.
+
+
+```{r samplesNMDS, echo = F, message=F, results='hide'}
+
+# loop through and ordinate each sample types
+
+sample_types <- unique(ST@sam_data$sample_type)
+
+for ( i in sample_types ){
+  # subset and ordinate
+  ST_sub <- subset_samples(ST, sample_type == i)
+  ST.uni <- get_unifrac(ST_sub)
+  ST.ord <- ordinate(ST_sub, "NMDS", ST.uni)
+  
+  # pull out MDS1, MDS2, sample type
+  MDS <- as.data.frame(ST.ord$points)
+  # test for significant relationship
+  mod1  <- lm(MDS$MDS1 ~ ST_sub@sam_data$shore_dist)
+  r_sq  <- summary(mod1)$r.squared
+  p_val <- signif(summary(mod1)$coefficients[2,4], digits = 3)
+
+ # plot MDS1 against shore_dist
+  
+  # set up dataframe for ggplot scatterplot
+   MDS_cor<-data.frame(shore_dist = ST_sub@sam_data$shore_dist, MDS1 = MDS$MDS1)
+ 
+  # ggplot scatterplot and regression line
+  
+   p <-ggplot(MDS_cor,  aes(shore_dist, MDS1, color = shore_dist)) +
+     geom_point(size = 4) +
+  #   labs(caption = paste("R^2 = ", round(r_sq, 3), "p =", p_val),
+   #  title = i) +
+     theme(
+     title = element_text(size = 25, face = "bold"),
+     axis.text.y = element_text(size = 25, face = "bold"),
+     axis.text.x = element_blank(),
+     legend.text = element_text(size = 20)
+     ) +
+     labs(color = "Gradient Distance", x = "Gradient Distance", y = "") +
+     coord_flip() +
+     uniform_gradient_color()
+  
+  # if low p value, plot regression line
+  
+  if(  p_val <0.01  ){
+    
+    # if regression is positive, flip the plot, regresssion line, colors
+    
+    if(mod1$coefficients[2] < 0 ){
+      
+    p <- p+ geom_abline(slope = mod1$coefficients[2]*-1, intercept = mod1$coefficients[1]*-1) +
+      scale_y_reverse() 
+      
+    } 
+    
+    # if regression is negative, just add the regression line
+    else
+      {
+    p <- p + geom_abline(slope = mod1$coefficients[2], intercept = mod1$coefficients[1])
+    }
+  } 
+
+  print(p)
+  
+  ggsave(paste("outputs/figures/mds_cor_" , i , ".png", sep = ""), width = 12, height = 7)
+
+  
+  # rest
+  Sys.sleep(0.5)
+  
+# plot ordination
+  
+
+  p <- plot_ordination(ST_sub, ST.ord, type="samples", color = "shore_dist", title= i)
+  p <- p +
+    geom_point(size = 4)+
+    uniform_gradient_color() + 
+    scale_shape_discrete(solid = T)+
+    theme(title = element_text(size = 16, face = "bold"), axis.text=element_text(size=12),legend.text = element_text(size = 20))+
+    labs(color = "Gradient Distance")
+  print(p)
+  
+  png(paste("outputs/figures/nmds_" , i , ".png", sep = ""), width = 800, height = 600)
+  print(p)
+  dev.off()
+}
+
+
+
+
+```
+
+
+
+
+
+### Ordinate for each transect for a given host
+This turned out to not be very informative. 
+The goal was to see if NMDS pulled out smaller scale spatial patterns.
+Problem is, there are not many data points in each transect.
+
+
+```{r}
+# ST_nonhost  <- subset_samples(ST, sample_type %in% c("SoilDeep","SoilShallow","PlantRoot"))
+# transect_names <- unique(ST@sam_data$transect_name) %>% as.character()
+# 
+# # TODO figure out how to assign unique color scales to each plot in loop
+# ## Loop through 
+# for ( trans in transect_names ){
+#   # subset and ordinate
+#   ST_sub <- subset_samples(ST_nonhost, transect_name == trans)
+#   ST.uni <- get_unifrac(ST_sub)
+#   min_dist <- min(ST_sub@sam_data$shore_dist)
+#   max_dist <- max(ST_sub@sam_data$shore_dist)
+#   ST.ord <- ordinate(ST_sub, "NMDS", ST.uni)
+#   
+#   #plot
+#   p <- plot_ordination(ST_sub, ST.ord, type="samples", color = "shore_dist", shape = "sample_type", title= paste("Nonhost, NMDS, Unifrac,",trans))
+#   p <- p  + 
+#     scale_shape_discrete(solid=T)
+#   print(p)
+# 
+# }
+```
+
+
+
+### Ordinate all soil like samples
+Bacterial communities in soil (deep), soil (shallow), and plant roots all follow an apparently linear trend along the transect gradient. Differences in deep/shallow soil are not detected by ordiation and are fairly intermixed.
+However, plant root communities separate out while following the same gradient trend.
+
+```{r}
+ST_soil  <- subset_samples(ST, sample_type %in% c("SoilDeep","SoilShallow","PlantRoot","Sediment"))
+  ST.uni <- get_unifrac(ST_soil)
+  ST.ord <- ordinate(ST_soil, "NMDS", "bray")
+  
+  # nmds plot shore_dist
+   
+  p <- plot_ordination(ST_soil, ST.ord, type="samples", color = "shore_dist", shape = "host")
+  p <- p  + 
+    scale_shape_discrete(solid=T)+
+    uniform_gradient_color() +
+    theme(title = element_text(size = 16, face = "bold"), axis.text=element_text(size=12),legend.text = element_text(size = 20))+
+    geom_point(size = 3)+
+    coord_fixed()+
+    labs(shape = "Host Type", color = "Gradient Distance")
+  print(p)
+  
+  # write out
+  ggsave("outputs/figures/soils_etc_dist_nmds.png", width = 10, height = 10)
+   
+  # nmds plot host
+   p <- plot_ordination(ST_soil, ST.ord, type="samples", color = "sample_type", shape = "host")
+    p <- p  + 
+      scale_shape_discrete(solid=T)+
+      theme(title = element_text(size = 16, face = "bold"), axis.text=element_text(size=12),legend.text = element_text(size = 20))+
+      geom_point(size = 3)+
+      coord_fixed()+
+      labs(color = "Gradient Distance", shape = "Host Type")
+    print(p)
+    
+   # write out
+  ggsave("outputs/figures/soils_etc_host_nmds.png", width = 10, height = 10)
+
+    
+    
+   # corelation plot
+   
+  MDS <- as.data.frame(ST.ord$points)
+  colnames(MDS) <- c("NMDS1","NMDS2")
+  # test for significant relationship
+  mod1  <- lm(MDS$NMDS1 ~ ST_soil@sam_data$shore_dist)
+  r_sq  <- summary(mod1)$r.squared
+  p_val <- signif(summary(mod1)$coefficients[2,4], digits = 3)
+  
+  MDS_cor<-data.frame(shore_dist = ST_soil@sam_data$shore_dist, NMDS1 = MDS$NMDS1)
+
+
+  
+  
+ # Cor plot shore_dist and NMDS1
+  p <- ggplot(MDS_cor,  aes(shore_dist, NMDS1, color = shore_dist)) +
+    geom_point(size=3) +
+      uniform_gradient_color() +  # Flipping the colors to match single sample NMDS plots :/
+    labs(caption = paste("R^2 = ", round(r_sq, 3), "p =", p_val),
+         x = "Gradient Distance",
+         color = "Gradient Distance") +
+    theme(title = element_text(size = 16, face = "bold"),
+          axis.text.y = element_text(size = 25, face = "bold"),
+          legend.text = element_text(size = 20),
+          axis.text.x = element_blank(),
+          plot.caption = element_text(size = 20)) +
+    geom_abline(slope = mod1$coefficients[2], intercept = mod1$coefficients[1])+
+    coord_flip()
+  
+ 
+
+  print(p)
+  
+  ggsave("outputs/figures/soils_etc_cor.png", width = 10, height = 7)
+
+
+  
+  rm(ST_soil)
+
+```
+
+### Ordinate just the middle sites
+Seems like the separation along the transect gradient is driven by the extremes (Summit and Estuary).
+Ordinations of the middle sites don't really separate out so neatly. 
+
+```{r}
+ST_mid  <- subset_samples(ST, (transect_name %in% c("STDrumRoadMauka","STFalls","STAboveFalls","STDrumRoadMakai","STGardens") &  sample_type %in% c("SoilDeep","SoilShallow","Sediment","PlantRoot")))
+  ST.uni <- get_unifrac(ST_mid)
+  ST.ord <- ordinate(ST_mid, "NMDS", ST.uni)
+  
+  
+  #plot
+  p <- plot_ordination(ST_mid, ST.ord, type="samples", color = "shore_dist", shape = "sample_type", title= paste("Samples In The Ground, Middle Sites"))
+  p <- p  + 
+    scale_shape_discrete(solid=T)+
+    uniform_gradient_color() +
+    theme(title = element_text(size = 16, face = "bold"), axis.text=element_text(size=12),legend.text = element_text(size = 20))+
+    geom_point(size = 3)+
+    coord_fixed()
+  print(p)
+  ggsave("outputs/figures/middle_sites_nmds.png", width = 10, height = 10)
+
+  rm(ST_mid)
+  
+
+```
+
+### Merging: Summing OTUs at family level for export/heatmaps
+Summing OTUs at the family level is recommended for producing readable heatmaps.
+First, transform the otu abundance to relative abundance, then sum. 
+
+```{r famMerge}
+# sum at family level
+#  ST_famglom <- speedyseq::tax_glom(ST, "family")
+# # 
+# # # check
+#  ntaxa(ST)
+#  ntaxa(ST_famglom)
+# 
+#  ST_fam_roots <- subset_samples(ST_famglom, sample_type == "PlantRoot")
+#  ST_fam_roots <- prune_taxa(names(sort(taxa_sums(ST_fam_roots),TRUE)[1:30]), ST_fam_roots)
+#  plot_heatmap(ST_fam_roots, sample.label="transect_name")
+#   
+#  ntaxa(ST_fam_roots) 
+
+
+```
+
+### Export drosophila samples
+```{r}
+ST_dros  <- subset_samples(ST, sample_type == "Drosophila" )
+  ST.uni.dros <- get_unifrac(ST_dros) %>% as.matrix() %>% as.data.frame()
+  
+  write.csv(ST_dros@otu_table,"outputs/drosophila/ST_drosophila_esv_table.csv")
+  write.csv(ST_dros@sam_data, "outputs/drosophila/ST_drosophila_sample_table.csv")
+  write.csv(ST_dros@tax_table, "outputs/drosophila/ST_drosophila_taxonomy_table.csv")
+  write.csv(ST.uni.dros, "outputs/drosophila/ST_drosophila_weighted_unifrac.csv")
+  
+```
+
+
+
+### Mantel tests
+
+```{r}
+sample_types <- unique(ST@sam_data$sample_type)
+
+mantel_outputs <- data.frame(SampleType = sample_types, Mantel_R = NA, Mantel_Significance = NA)
+
+for(i in seq_along(sample_types)){
+  # subset by sample type
+  ST_sub <- subset_samples(ST, sample_type == sample_types[[i]])
+  ST.uni <- get_unifrac(ST_sub)
+  
+  # distance matrix of shore_dist
+  shore_dists  <- ST_sub@sam_data$shore_dist
+  d.shore_dist <-dist(shore_dists, method = "euclidean")  
+  
+  # mantel
+  uni_shore_dist <- mantel(ST.uni, d.shore_dist, method = "spearman", permutations = 9999, na.rm = T)
+  mantel_outputs[i,"Mantel_R"]            <- uni_shore_dist$statistic
+  mantel_outputs[i,"Mantel_Significance"] <- uni_shore_dist$signif
+  }
+
+mantel_outputs
+write.csv(mantel_outputs, "outputs/mantel_outputs.csv")
+
+```
+
+
+### Heatmaps
+
+```{r heatmaps}
+# TODO figure out how to run heatmaps without crashing R. 
+#speedyseq::plot_heatmap(test,method = "NMDS", distance = "bray", sample.label =  "habitat", taxa.label = "family")
+```
+
