@@ -1,8 +1,8 @@
 ## Load Libraries-----------------------------------------------------------------------------------------------------------------------------------------
-spatial_libs <- c("rgdal","rayshader", "FedData","raster","sp", "automap","geoviz","sf", "ggspatial")
+spatial_libs <- c("rgdal","rayshader", "FedData","raster","sp","RStoolbox", "automap","geoviz","sf", "ggspatial")
 
 # general
-general_libs <- c("data.table","dplyr","tidyr","ggplot2","viridisLite","data.table","grid","png","RColorBrewer", "ggnewscale")
+general_libs <- c("data.table","dplyr","tidyr","ggplot2","viridisLite","data.table","grid","png","RColorBrewer","cowplot", "ggnewscale")
 
 # load libraries invisibly
 invisible( lapply( c(spatial_libs,general_libs),
@@ -20,6 +20,8 @@ meta <- as(meta, "data.table")
 
 meta <- meta[ , c("lat","long"):= list(as.numeric(lat), as.numeric(long))]
 
+# extract sites
+point_data <- meta[ , .N , by = .(site_name, lat,long)]
 
 ## Set Boundaries -------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -43,9 +45,9 @@ bbox$ggmap <- unlist(bbox[1:2])
 names(bbox$ggmap) <- c("left","bottom","right","top")
 
 # create an emtpy spatial polygon template of the bounding box for pulling elevation data
-bbox_extent <- polygon_from_extent(raster::extent(bbox$p1$long, bbox$p2$long, bbox$p1$lat, bbox$p2$lat),
-                                   proj4string = "+proj=longlat +ellps=GRS80 +datum=WGS84 +no_defs")  
-
+bbox_extent <-
+  polygon_from_extent(raster::extent(bbox$p1$long, bbox$p2$long, bbox$p1$lat, bbox$p2$lat),
+                      proj4string = "+proj=longlat +datum=WGS84 +no_defs")
 
 
 std_proj <- crs(bbox_extent)
@@ -56,11 +58,24 @@ plot_lims <- list(x=c(bbox$p1$long, bbox$p2$long), y = c(bbox$p1$lat, bbox$p2$la
 ##  Base Map -------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # hawaii coastline (state GIS, projection utm-4, nad83)
-hi_coast         <- st_read("data/raw/hawaii_coastline/coast_n83.shp", crs = "epsg:26904")
+hi_coast <- st_read("data/raw/spatial/hawaii_coastline/coast_n83.shp",
+                    crs = "epsg:26904")
 
 # project to std proj
 hi_coast <-st_transform(hi_coast,std_proj)
 
+## Streams -----------------------------------------------------------------------------------------------------------------------------------
+# check stream metadata to identify stream name
+streams      <- st_read('data/raw/spatial/darstreams.kml')
+waimea_river <- streams[streams$STREAM_NAM == "Waimea R",]
+
+# crop river to plot area
+waimea_river <- st_crop(waimea_river, c(xmin = plot_lims$x[1],
+                                        xmax = plot_lims$x[2],
+                                        ymin = plot_lims$y[1],
+                                        ymax = plot_lims$y[2]))
+
+test <- waimea_river[10,]
 
 ## Elevation Raster  -------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -74,7 +89,7 @@ elev_ras_full <-
     label = "elev",
     res = "1",
     force.redo = F,
-    raw.dir = "../data/raw/spatial",
+    raw.dir = "/data/raw/spatial",
     extraction.dir = "../data/processed/interim/"
   )
 
@@ -89,14 +104,28 @@ crs(elev_ras_full)
 
 ## Bathymetry Rasters -------------------------------------------------------------------------------------------------------------------------------------------------------
 ## Bathymetry
-bath_ras_50 <- raster("data/raw/mhi_mbsyn_bathyto")
+bath_ras_50 <- raster("data/raw/spatial/mhi_mbsyn_bathyonly_50m_v21.nc")
 
 bath_ras_50 <- crop(bath_ras_50, bbox_extent)
 
 # set projection and resolution to match elevation
-bath_ras_50 <- projectRaster(bath_ras_50, elev_ras)
+bath_ras_50 <- projectRaster(bath_ras_50, elev_ras_full)
 
 bath_dt_50 <- as(raster::as.data.frame(bath_ras_50, xy=T), "data.table")
+
+
+# bath and topo
+bath_topo_ras <- raster("data/raw/spatial/mhi_mbsyn_bathytopo_50m_v21.nc")
+
+bath_topo_ras <- crop(bath_topo_ras, bbox_extent)
+
+# set projection and resolution to match elevation
+bath_topo_ras <- projectRaster(bath_topo_ras, elev_ras_full)
+
+bath_topo_dt <- as(raster::as.data.frame(bath_topo_ras, xy = T), "data.table")
+
+bath_topo_mat <- raster::as.matrix(bath_topo_ras)
+
 
 ## Mask Bathymetry and Elevation ----------------------------------------------------------------------------------------------------------------------------
 
@@ -131,18 +160,26 @@ elev_map <- ggplot() +
   geom_raster(data= elev_dt, mapping =aes(x = x, y = y, fill = elev))
 elev_map
 
+# try merging
+bath_elev_merge <- merge(bath_ras_50, elev_ras)
+bath_elev_dt <- raster::as.data.frame(bath_elev_merge , xy=T) %>% as.data.table()
+bath_elev_mat <- as.matrix(bath_elev_merge)
 
+ ggplot()+
+  geom_raster(data = bath_elev_dt, mapping  =aes(x = x, y = y, fill = layer))
 
-## -------------------------------------------------------------------------------------------------------------------------------------------------------
+## Satelite Image -------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # function crop_sat will read in RGB landsat raster, crop it to map extent, write out as png
 
-# use this fuction to define image size
+# use this fuction to define image size for using PNG images as map overlays
 
-define_image_size <- function(bbox, major_dim = 400) {
+define_image_size <- function(match_to, major_dim = 400) {
   
   # calculate aspect ration (width/height) from lat/long bounding box
-  aspect_ratio <- abs((bbox$p1$long - bbox$p2$long) / (bbox$p1$lat - bbox$p2$lat))
+  lims <- extent(match_to)
+  
+  aspect_ratio <- abs((lims[1]- lims[2]) / (lims[3] - lims[4]))
   
   # define dimensions
   img_width <- ifelse(aspect_ratio > 1, major_dim, major_dim*aspect_ratio) %>% round()
@@ -150,76 +187,120 @@ define_image_size <- function(bbox, major_dim = 400) {
   
   size_str <- paste(img_width, img_height, sep = ",")
   
-  list(height = img_height, width = img_width, size = size_str)}
+  list(height = img_height, width = img_width, size = size_str)
+  }
 
 
 # calculate image dimensions based on size of elevation raster
-img_size <- define_image_size(bbox = bbox, major_dim = max(dim(elev_ras)))
+img_size <- define_image_size(match_to = bath_elev_merge,
+                              major_dim = max(dim(bath_elev_merge)))
 
-crop_sat <-function(rast_file = "data/raw/oahu_landsat/Oahu_Landsat_15m.jp2", extent = bbox_extent, new_proj = std_proj){
+# crop satelite image to match existing raster 
+# (requires developer version of raster package to supress plot margins)
+crop_sat <-function(rast_file = NULL, match_to , new_proj = std_proj){
   rast <- stack(rast_file)
   
-  rast_proj   <- crs(rast)  
-  rast_extent <- spTransform(extent, CRSobj = rast_proj)
+  rast_extent <- projectRaster(rast, match_to)
   
-  small_rast <- crop(rast, rast_extent)
+  small_rast <- crop(rast_extent, match_to)
   
   message("writing out cropped png")
   
-  png("data/processed/sat_basemap.png", width = img_size$width, height = img_size$height)
+  png("data/processed/sat_basemap.png",
+      width = img_size$width-17.1,
+      height = img_size$height
+      )
   par(mar = c(0,0,0,0))
-  plotRGB(small_rast)
+  plotRGB(small_rast, margins = T, colNA = "black")
   dev.off()
   
   return(small_rast)
 }
 
-sat_ras <- crop_sat()
+sat_ras <- crop_sat(rast_file = "data/raw/spatial/oahu_landsat/Oahu_Landsat_15m.jp2",
+                    match_to = bath_elev_merge)
 
-plotRGB(sat_ras)
 
 
-sat_grob 
+plotRGB(sat_ras, alpha = 200)
 
-## Streams -----------------------------------------------------------------------------------------------------------------------------------
-# check stream metadata to identify stream name
-streams      <- st_read('data/raw/darstreams.kml')
-waimea_river <- streams[streams$STREAM_NAM == "Waimea R",]
 
-test <- waimea_river[10,]
+
+# read in PNG
+sat_png <- readPNG("data/processed/sat_basemap.png")
+
+
+# function pngToRBGA() converts a 3 channel RBG array to a 4 channel RBGA array
+pngToRBGA<-function(img){
+                img <- array( c(img[,,1],
+                                 img[,,2],
+                                 img[,,3],
+                                 rep(1, dim(img)[1] * dim(img)[2])),
+                               dim = c(dim(img)[1:2],4))
+}
+
+img <- pngToRBGA(sat_png)
+
+w <-  matrix(rgb(img[, , 1], img[, , 2], img[, , 3], img[, , 4]), 
+         nrow = dim(img)[1])
+g <- rasterGrob(w)
+
+
 
 ## Plot 2D Map -------------------------------------------------------------------------------------------------------------------------------
 
-elev_colors <-colorRampPalette(colors = c(rep("darkblue", 3), "lightblue",rep("darkgreen",3)))
-
 # Plot on raster background
-p1<- ggplot() + 
-  # raster
-  geom_raster(data= elev_dt, mapping =aes(x = x, y = y, fill = elev), alpha = elev_dt$alpha)+
-  scale_fill_gradient(low = "darkgreen", high = "tan") +
+p1 <- ggplot() + 
+  # elevation raster
+  geom_raster(data= elev_dt,
+              mapping = aes(x = x, y = y, fill = elev),
+              alpha = elev_dt$alpha,
+              interpolate = T) +
+  scale_fill_gradient( low = "khaki1", high = "red") +
+  
+  # new scale for bathymetry
   new_scale_fill()+
-  geom_raster(data = bath_dt,  mapping =aes(x = x, y = y, fill = depth), alpha = bath_dt$alpha)+
-  scale_fill_gradient(low = "darkblue", high = "lightblue")+
+  geom_raster(data = bath_dt,
+              mapping = aes(x = x, y = y, fill = depth), 
+              alpha = bath_dt$alpha,
+              interpolate = T) +
+  scale_fill_gradient(low = "darkblue",
+                      high = "white")+
 
-  # river
-  geom_sf(data = waimea_river, color = alpha("blue",0.8)) +
+  # river line
+  geom_sf(data = waimea_river,
+          color = alpha("blue",0.8),
+          size = 4) +
   
   # points
-  geom_point(aes(x = long, y = lat, color = site_name), data = point_data, shape = 16) +
-  scale_color_manual(values = viridis(n=5)) +
-  
+  geom_point(aes(x = long, y = lat, color = site_name), 
+             data = point_data,
+             shape = 21,
+             fill = "white",
+             size = 1.5,
+             stroke = 2) +
+  scale_color_manual(values = viridis(n = 5)) +
+
   # annotations
-  annotation_scale(location = "bl", width_hint = 0.4)+
-  annotation_north_arrow(height = unit(0.5,"cm"),
-                         width = unit(0.5,"cm"),
-                         pad_y = unit(0.75,"cm"),
-                         style = north_arrow_minimal("text_size = 8"))+
+  annotation_scale(location = "bl", width_hint = 0.4) +
+  annotation_north_arrow(
+    height = unit(0.5, "cm"),
+    width = unit(0.5, "cm"),
+    pad_y = unit(0.75, "cm"),
+    style = north_arrow_minimal("text_size = 8")
+  ) +
   
   # map settings
-  coord_sf(xlim = plot_lims$x, ylim = plot_lims$y, clip = "on") +
-  theme_minimal()+
-  theme(panel.background = element_rect(fill = "white")) +
-  labs(fill = "Depth (m)", color = "Site") 
+  coord_sf(xlim = plot_lims$x,
+           ylim = plot_lims$y,
+           clip = "on") +
+  theme_minimal() +
+  theme(panel.background = element_rect(fill = "white"),
+        axis.title.y = element_blank(),
+        axis.text.y  = element_blank(),
+        axis.ticks.y = element_blank()) +
+  margin()+
+  labs(fill = "Depth (m)", color = "Site")
 
 p1
 
@@ -230,7 +311,12 @@ p2 <-ggplot()+
   # coastline
   geom_sf(data = hi_coast) +
   # points
-  geom_point(aes(x = long, y = lat, color = site_name), data = point_data, size = 0.5, shape = 17) +
+  geom_point(aes(x = long, y = lat, color = site_name), 
+             data = point_data,
+             shape = 21,
+             fill = "white",
+             size = 1.5,
+             stroke = 2) +
   scale_color_manual(values = c("orange","red","blue","yellow","black")) +
   # rectangle
   geom_rect(aes(xmin = plot_lims$x[1]- 0.003,
@@ -242,47 +328,78 @@ p2 <-ggplot()+
   theme(legend.position = "none")+
   coord_sf(xlim = c(oahu_limits[c(1,3)]), ylim= c(oahu_limits[c(2,4)])) 
 
-
 p2
 
-p1 + annotation_custom(
-  grob = ggplotGrob(p2),
-  ymin = plot_lims$y[1],
-  ymax = plot_lims$y[1] +.02,
-  xmin = plot_lims$x[2] - 0.02,
-  xmax = plot_lims$x[2]
+p1.5 <- p1 + annotation_custom(
+                              grob = ggplotGrob(p2),
+                              ymin = plot_lims$y[1],
+                              ymax = plot_lims$y[1] + .02,
+                              xmin = plot_lims$x[2] - 0.02,
+                              xmax = plot_lims$x[2]
 )
 
-ggsave("output/map/ST_marine_map.png")
 
 
 p3 <-  ggplot() + 
-  # raster
-  geom_raster(data= elev_dt, mapping =aes(x = x, y = y, fill = elev), alpha = elev_dt$alpha)+
+  
+  # Satellite Image
+  annotation_custom(g, xmin=-Inf, ymin=-Inf, xmax=Inf, ymax=Inf)+
+  
+  # river line
+  geom_sf(data = waimea_river,
+          color = alpha("blue",0.8)) +
+  
+  # points
+  geom_point(aes(x = long, y = lat, color = site_name), 
+             data = point_data,
+             shape = 21,
+             fill = "white",
+             size = 1.5,
+             stroke = 2) +
+  scale_color_manual(values = viridis(n = 5)) +
+  
+  # annotations
+  annotation_scale(location = "bl", width_hint = 0.4) +
+  annotation_north_arrow(
+    height = unit(0.5, "cm"),
+    width = unit(0.5, "cm"),
+    pad_y = unit(0.75, "cm"),
+    style = north_arrow_minimal("text_size = 8")
+  ) +
+  
+  # map settings
+  coord_sf(xlim = plot_lims$x,
+           ylim = plot_lims$y,
+           clip = "on") +
+  theme_minimal() +
+  theme(panel.background = element_rect(fill = "white"),
+        legend.position = "none")
 
 
+plot_grid(p3,p1.5, labels = c("A","B"), label_size = 12, axis = "tblr",align = "v" )
 
-## -------------------------------------------------------------------------------------------------------------------------------------------------------
+ggsave("output/map/ST_marine_map.png", 
+       dpi = 300,
+       width = 15,
+       height = 15,
+       units = "in")
+
+## Prep for Rayshader -------------------------------------------------------------------------------------------------------------------------------------------------------
 # calculate image dimensions based on size of elevation raster
-img_size <- define_image_size(bbox = bbox, major_dim = max(dim(elev_bath_ras)))
-
-# now export the raster as a png with the same dimensions as the raster
-
-png("test1.png", width = img_size$width, height = img_size$height)
-par(mar = c(0,0,0,0))
-raster::image(elev_bath_ras, axes = F, col = viridis(1000))
-dev.off()
-
 
 
 ## -------------------------------------------------------------------------------------------------------------------------------------------------------
 # read in custom overlay raster
-elev_overlay <-  png::readPNG("test1.png")
+sat_overlay <-  img
+
+# identify base matrix
+base_mat <- bath_elev_mat %>% as.data.frame() %>% rev()
+
 
 # calculate rayshader layers
-ambmat <- ambient_shade(elev_bath_mat, zscale = 30)
-raymat <- ray_shade(elev_bath_mat, zscale = 30, lambert = F)
-watermap <- detect_water(elev_bath_mat)
+ambmat <- ambient_shade(base_mat, zscale = 30)
+raymat <- ray_shade(base_mat, zscale = 30, lambert = T)
+watermap <- apply(base_mat, 2, function(x) rev(ifelse(x > -0.1, 0, 1)))
 
 # define zscale
 zscale <- 10
@@ -291,12 +408,14 @@ zscale <- 10
 
 ## -------------------------------------------------------------------------------------------------------------------------------------------------------
 # plot 2D
-elev_bath_mat%>%
+base_mat %>%
   sphere_shade(texture = "imhof4") %>%
   add_water(watermap, color = "imhof4") %>%
+  add_overlay(generate_contour_overlay(base_mat)) %>%
   add_shadow(raymat, max_darken = 0.5) %>%
   add_shadow(ambmat, max_darken = 0.5) %>%
-  add_overlay(elev_overlay, alphalayer = 0.5) %>%
+  #generate_contour_overlay(base_mat) %>%
+  add_overlay(sat_overlay, alphalayer = 0.5) %>%
   plot_map()
 
 
@@ -305,26 +424,26 @@ elev_bath_mat%>%
 rgl::clear3d()
 
 # plot that 3d map!
-elev_bath_mat %>%
-  sphere_shade(texture = "bw") %>%
+base_mat %>%
+  sphere_shade(texture = "imhof1") %>%
   add_water(watermap, color = "imhof1") %>%
   add_shadow(raymat, max_darken = 0.5) %>%
   add_shadow(ambmat, 0) %>%
+  add_overlay(sat_overlay, alphalayer = 0.5) %>%
   plot_3d(
-    elev_mat,
+    base_mat,
     zscale = zscale,
     windowsize = c(1200, 1000),
     water = T,
-    wateralpha = 0.5,
+    wateralpha = 0.02,
     waterlinealpha = 0.5,
-    waterdepth = 0.001,
-    watercolor = "lightblue",
-    theta = -120,
-    phi = 50,
+    theta = -180,
+    phi = 45,
     zoom = 0.65,
     fov = 0
   )
 
+render_snapshot()
 
 Sys.sleep(0.2)
 render_snapshot(filename = "output/map/test_render.png")

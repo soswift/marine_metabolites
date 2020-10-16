@@ -6,12 +6,16 @@
 
 library(phyloseq)
 library(data.table)
-library(dplyr)
 library(eulerr)
+library(vegan)
+library(pairwiseAdonis)
 
-
-setwd("/home/sean/Documents/Bioinformatics/Projects/SuperTransect/Analysis/marine_manuscript")
-# 1. Loading and clean microbial data ----------------------------
+#setwd("/home/sean/Documents/Bioinformatics/Projects/SuperTransect/Analysis/marine_manuscript")
+# 1. Load and clean microbial data ----------------------------
+# Load and clean data from the metaflowimcs pipeline.
+# Expects standards pipeline output format.
+# Data is subset to only include desired marine samples.
+# Read counts are subsampled to even depth and relative abundance transformed.
 
 ## identify data files
 
@@ -26,11 +30,24 @@ unifrac_file     <- "data/raw/unifrac_unweighted_100.csv"
 
 tree_file        <- "data/raw/FastTree_100.tre"
 
-
-
+# source lots of helper functions for plotting and subsetting
+source("src/helper_functions.R")
 
 # source function for reading and cleaning abundance table
 source("src/clean_and_query_16S.R")
+
+# source helper function for making phyloseq objects
+source("src/make_phyloseq.R")
+
+# source funciton for writing out phyloseq objects
+source("src/physeq_csv_out.R")
+
+# function for reading unifrac dists from flat tables
+source("src/read_unifrac.R")
+
+# function for formatting microbial data for mmvec
+source("src/format_mmvec.R")
+
 
 # read in data and sample data, 
 
@@ -43,12 +60,14 @@ marine_data <- clean_16S_tables(abundance_file = abundance_file,
                                  cull = list(min.num = 3,
                                              min.abund = 0.00001,
                                              min.single.abund = 0.001))
-source("src/make_phyloseq.R")
+
 
 marine_phy <- make_phyloseq(abund_file = "data/processed/ST_marine_abundance_table.csv",
                             meta_file  = "data/processed/ST_marine_metadata_table.csv",
                             tax_file   = "data/processed/ST_marine_taxonomy_table.csv",
                             id_column  = "sequencing_id")
+
+rm(marine_data)
 
 # check variation in sequencing depths and subsample to standard value
 nrow(otu_table(marine_phy))
@@ -69,41 +88,41 @@ length(sample_names(marine_phy_rar))
 
 
 # convert the OTU counts to relative abundance
-final_marine_phy <- transform_sample_counts(marine_phy_rar, function(x) x / sum(x))
+final_marine_phy <- transform_sample_counts(marine_phy_rar,
+                                            function(x) x / sum(x))
 
 # drop sediment and water samples
-final_marine_phy <- subset_samples(final_marine_phy, sample_type %in% c("Limu","CCA","Coral"))
-final_marine_phy <- prune_taxa(taxa_sums(final_marine_phy) > 0, final_marine_phy)
+final_marine_phy <- subset_samples(final_marine_phy,
+                                   sample_type %in% c("Limu","CCA","Coral"))
+
+final_marine_phy <- prune_taxa(x = final_marine_phy,
+                               taxa = taxa_sums(final_marine_phy) > 0)
 
 
 saveRDS(final_marine_phy, file = "data/processed/final_marine_phy.rds")
 
+rm(marine_phy_rar)
 
+# write marine microbial sample tables out as flat files
+physeq_csv_out(final_marine_phy,
+               description = "all_marine_microbe",
+               outdir = "data/processed/table_exports/")
 
-# read in unifrac distances and match to samples in processed phyloseq object
-
-read_unifrac <- function(unifrac_file, phyloseq_obj){
-
-unifrac <- read.csv(unifrac_file, header = T, row.names = 1)
-
-colnames(unifrac) <- sub("X","",colnames(unifrac))
-
-unifrac <- unifrac[sample_names(phyloseq_obj), sample_names(phyloseq_obj)]
-
-unifrac <- as.dist(as.matrix(unifrac))
-
-print(unifrac)
-
-
-}
-
+# finally, get unifrac distance object for the selected samples
 final_unifrac <- read_unifrac(unifrac_file = "data/raw/unifrac_weighted_100.csv", 
                               phyloseq_obj = final_marine_phy)
 
+# write out unifrac subset to marine samples
 saveRDS(final_unifrac, "data/processed/final_unifrac.rds")
+write.csv(as.matrix(final_unifrac),
+          "data/processed/table_exports/all_marine_microbe_unifrac_dist.csv")
+
+# Final_unifrac contains all the relevant marine microbial samples.
+# Some of these samples may not have corresponding metabolomics data.
+# Incomparable samples will be dropped for joint analyses.
+
 
 # 2. export data for MMVEC -----------------------------------------
-source("src/format_mmvec.R")
 
 # to match metabolomics data, we need to replace the id used for sequencing with sample names
 # from the metadata, pull out sample barcodes for each sequencing id, matching the order in the abundance table
@@ -117,15 +136,17 @@ format_mmvec(phyloseq_obj = final_marine_phy,
              output_dir = "data/processed",
              description = "marine")
 
-# 3. Loading and Cleaning metabolomics data ------------------------------------------------
+# 3. Load and Cleaning metabolomics data ------------------------------------------------
+
+# Metabolomics data provided in one big table with peak identity and peak areas in the same file.
+# The sample data file matches the microbial sample data, but has additional information about metabolomics sample ids(?)
 
 
 # metabolomics data files
-chem_raw_file <- "data/raw/Helena_CCA_Coral_Limu_FeatureTable.txt"
+chem_raw_file    <- "data/raw/Helena_CCA_Coral_Limu_FeatureTable.txt"
 
 chem_sample_file <- "data/raw/new_marine_meta.csv"
 
-source("src/make_pcoa.R")
 
 # this table combines abundance and metabolite feature metadata
 chem_raw <- fread(chem_raw_file)
@@ -139,41 +160,82 @@ keep_genera <- c("Jania", "Halimeda","Dichotoma", "Porites", "Monitipora", "Poci
 chem_meta[ , genus := ifelse(genus %in% keep_genera, genus, "Other" )]
 
 
-# format metabolite data using tailored cleaning functions
+# format metabolite data using custom cleaning functions
+
+## drop bad samples
+bad_samples <- c(2638,
+                 2839,
+                 2684,
+                 2750,
+                 2815,
+                 2650,
+                 2795,
+                 2862,
+                 2905)
 
 # call function to pull out abundance
-chem_abund_w_blanks <- get_chem_abundance(chem_data = chem_raw)
 
+chem_abund_w_blanks <- get_chem_abundance(chem_data = chem_raw,
+                                          bad_samples = bad_samples)
+# call function to get chem peak data (i.e. classifications)
+chem_taxa_w_blanks <- get_chem_peak_data(chem_data = chem_raw)
+
+# arrange metadata
 chem_meta_w_blanks <- chem_meta[match(colnames(chem_abund_w_blanks), chem_meta$sample_barcode)]
+row.names(chem_meta_w_blanks) <- chem_meta_w_blanks[ , sample_barcode]
 
 chem_phy_w_blanks <- make_chem_phyloseq(chem_abund = chem_abund_w_blanks,
-                   chem_meta = chem_meta_w_blanks,
-                   id_column = "sample_barcode")
+                                     chem_meta = chem_meta_w_blanks,
+                                     chem_tax = chem_taxa_w_blanks,
+                                     id_column = "sample_barcode")
 
-# drop blanks
-blanks <- grep("blank", colnames(chem_abund_w_blanks), value = T)
+# drop blanks and remove chemical features no longer present
+not_blanks <- !grepl("blank",
+               colnames(chem_abund_w_blanks))
 
-chem_abund <- chem_abund_w_blanks[ , c(blanks):=NULL ]
+chem_abund <- chem_abund_w_blanks[ , not_blanks]
+chem_abund <- chem_abund[rowSums(chem_abund) > 0, ]
+
 
 # subset metadata to match cleaned abundance
 chem_meta <- chem_meta[match(colnames(chem_abund), chem_meta$sample_barcode)]
 
 
-
-
 # call function to make phyloseq of metabolite data
 chem_phy <- make_chem_phyloseq(chem_abund = chem_abund,
                                chem_meta = chem_meta, 
+                               chem_tax = chem_taxa_w_blanks,
                                id_column = "sample_barcode")
 
 # convert to relative abundance
-chem_phy <- transform_sample_counts(chem_phy , function(x) x / sum(x))
+chem_phy <- transform_sample_counts(chem_phy,
+                                    function(x) x / sum(x))
 
 
 # set color scheme for sample types
-sample_type_cols <- c(CCA = "#6469ed", Coral = "#e49c4c", Limu = "#7cc854" )
+sample_type_cols <- c(CCA = "#6469ed",
+                      Coral = "#e49c4c",
+                      Limu = "#7cc854" )
 
-# 4. Plot metabolite NMDS and calculate permanovas -----------------------------------------------------
+# write out as flat tables
+physeq_csv_out(chem_phy,
+               description = "all_marine_metabolite",
+               outdir = "data/processed/table_exports")
+
+physeq_csv_out(chem_phy_w_blanks,
+               description = "all_marine_metabolite_w_blanks",
+               outdir = "data/processed/table_exports/")
+
+saveRDS(chem_phy, "data/processed/chem_phy.rds")
+
+# clean up
+rm(chem_abund_w_blanks, 
+        chem_taxa_w_blanks,
+        chem_meta_w_blanks,
+        chem_abund,
+        chem_meta)
+
+# 4. All metabolite NMDS and calculate permanovas -----------------------------------------------------
 
 # initalize chem distances list
 chem_dist <- list()
@@ -182,9 +244,12 @@ chem_dist <- list()
 chem_p <- list()
 
 # NMDS for all samples, by type
-chem_dist$canberra <- vegdist(veganifyOTU(chem_phy), method = "canberra")
-chem_dist$bray <- vegdist(veganifyOTU(chem_phy), method = "bray")
-chem_dist$euclidean <- vegdist(veganifyOTU(chem_phy), method = "euclidean")
+chem_dist$canberra <- vegdist(veganifyOTU(chem_phy),
+                              method = "canberra")
+chem_dist$bray <- vegdist(veganifyOTU(chem_phy),
+                          method = "bray")
+chem_dist$euclidean <- vegdist(veganifyOTU(chem_phy),
+                               method = "euclidean")
 
 # run NMDS on all three distance objects
 
@@ -202,20 +267,22 @@ for(a in seq_along(chem_dist) ){
     color = "sample_type",
     shape = "site_name",
     title = paste0("All Metabolite NMDS, ", dist_name)
-  ) + scale_color_manual(values = sample_type_cols)+ 
-    geom_text()
+  ) + scale_color_manual(values = sample_type_cols)
   
 }
 
 g <-arrangeGrob(chem_p[[1]], chem_p[[2]], chem_p[[3]],
                 nrow = 1, ncol = 3)
 
-ggsave(paste0("output/NMDS/all_metabolites_NMDS_dists.pdf"),  plot = g, width = 15, height = 5)
-
+ggsave(paste0("output/NMDS/all_metabolites_NMDS_dists.pdf"),
+       plot = g,
+       width = 15,
+       height = 5)
 
 # run NMDS on metabolites with blanks
 
-dist_blanks <- vegdist(veganifyOTU(chem_phy_w_blanks), method = "canberra")
+dist_blanks <- vegdist(veganifyOTU(chem_phy_w_blanks),
+                       method = "bray")
 
 chem_ord_w_blanks  <- ordinate(chem_phy_w_blanks,
                       method = "NMDS",
@@ -229,26 +296,57 @@ blank_p <- plot_ordination(
   title = "All Metabolite NMDS, canberra"
 ) + scale_color_manual(values = c("darkgray",sample_type_cols))
 
-ggsave("output/NMDS/all_metabolites_NMDS_w_blanks.pdf", plot = blank_p)
+ggsave("output/NMDS/all_metabolites_NMDS_w_blanks.pdf",
+       plot = blank_p)
 
 # chem permanovas 
-# permanova for all samples, by type and site
+# do permanova for all samples, by type and site
 
-# initalize anova table
-chem_anovas <- list()
-
-chem_anovas$all <-
+chem_anova_all <-
   do_permanova(
     chem_phy,
     var_name = "sample_type*site_name",
-    dist_obj = chem_dist[[1]],
+    dist_obj = chem_dist$bray,
     description = "All microbe samples"
   )
+write.csv(chem_anova_all,
+          "output/permanova/all_metabolite_permanova_by_site_type.csv")
+
+
+# do pairwise permanova for all samples by type
+chem_anova_pairwise <- pairwise.adonis2(chem_dist$bray ~ sample_type,
+                                        data = as(sample_data(chem_phy),
+                                                  "data.frame"))
+write.csv(chem_anova_pairwise,
+          "output/permanova/all_metabolite_pairwise_permanova_by_type.csv")
+
+# calculate beta dispersion by group and test significance
+chem_sam_dat <- as(sample_data(chem_phy), "data.frame")
+
+chem_groups <- chem_sam_dat[match(labels(chem_dist$bray),
+                                  chem_sam_dat$sample_barcode), 
+                            "sample_type"]
+
+chem_betadisp <- betadisper(chem_dist$bray, chem_groups)
+
+# write out beta dispersion summary and tukey test resulst
+sink("output/permanova/all_metabolite_betadispersion.txt" )
+print(chem_betadisp)
+print(TukeyHSD(chem_betadisp))
+sink()
+
+# write out distance matrices
+write.csv(as.matrix(chem_dist$bray),
+          "data/processed/table_exports/all_marine_metabolite_bray_dist.csv")
+write.csv(as.matrix(dist_blanks),
+          "data/processed/table_exports/all_marine_metabolite_w_blanks_bray_dist.csv")
 
 # 5. Metabolite by sample type NMDS and permanova --------------------------------------------
 sample_types <- unique(chem_phy@sam_data$sample_type)
 
 chem_type_p <- list()
+
+chem_anovas <- list()
 
 for(i in sample_types){
   # subset
@@ -284,7 +382,8 @@ for(i in sample_types){
   
 }
 
-write.csv(bind_rows(chem_anovas), "output/NMDS/metabolite_anova_results.csv")
+write.csv(bind_rows(chem_anovas),
+          "output/permanova/sample_type_metabolite_permanova_results_by_site.csv")
 
 
 g <-arrangeGrob(chem_type_p[[1]], chem_type_p[[3]], chem_type_p[[5]],
@@ -292,11 +391,14 @@ g <-arrangeGrob(chem_type_p[[1]], chem_type_p[[3]], chem_type_p[[5]],
                 nrow = 2, ncol = 3)
 
 
-ggsave(paste0("output/NMDS/sample_type_metabolites_NMDS.pdf"),  plot = g, width = 15, height = 5)
+ggsave(paste0("output/NMDS/sample_type_metabolites_NMDS.pdf"),
+       plot = g, 
+       width = 15,
+       height = 5)
 
 
 
-# Load Saved  Microbial Data----------------------------------------------------------------
+# Save Point: Load Cleaned Microbe and Metabolite Data----------------------------------------------------------------
 final_marine_phy <- readRDS("data/processed/final_marine_phy.rds")
 
 final_unifrac <- readRDS("data/processed/final_unifrac.rds")
@@ -311,7 +413,6 @@ micro_phy <- final_marine_phy
 # clean up genera names
 sample_data(micro_phy)$genus <- ifelse(sample_data(micro_phy)$genus %in% keep_genera,
                                        sample_data(micro_phy)$genus, "Other")
-
 
 # unifrac distances
 micro_dist <- final_unifrac
@@ -331,15 +432,40 @@ plot_ordination(micro_phy,
 ggsave("output/NMDS/all_microbes_NMDS.pdf",width = 7, height = 5)
 
 
-# permanova on all microbe sample type separation
-micro_anovas <- list()
-micro_anovas$all <- do_permanova(micro_phy, var_name = "sample_type", micro_dist, description = "all microbe samples")
+# do permanova on all microbe sample type separation
 
+micro_anova_all <- do_permanova(micro_phy,
+                                  var_name = "sample_type*site_name",
+                                  micro_dist,
+                                  description = "all microbe samples")
+write.csv(micro_anova_all, "output/permanova/all_microbe_permanova_by_site_type.csv")
+
+micro_anova_pairwise <- pairwise.adonis2(micro_dist ~ sample_type,
+                                         data = as(sample_data(micro_phy),
+                                                   "data.frame"))
+write.csv(micro_anova_pairwise, "output/permanova/all_microbe_pairwise_permanova_by_type")
+
+# do betadispersion by group on all microbe samples
+micro_sam_dat <- as(sample_data(micro_phy), "data.frame")
+
+micro_groups <- micro_sam_dat[match(labels(micro_dist),
+                                  micro_sam_dat$sequencing_id), 
+                            "sample_type"]
+
+micro_betadisp <- betadisper(micro_dist, micro_groups)
+
+# write out beta dispersion summary and tukey test resulst
+sink("output/permanova/all_microbe_betadispersion.txt" )
+print(micro_betadisp)
+print(TukeyHSD(micro_betadisp))
+sink()
 
 # 7. Microbe by sample type NMDS and permanovas ---------------------------
 
 # initialize list of plots for microbial samples types
 micro_type_p <- list()
+
+micro_anovas <- list()
 
 for(i in sample_types){
   
@@ -374,10 +500,12 @@ g <-arrangeGrob(micro_type_p[["Limu_site"]], micro_type_p[["Coral_site"]], micro
                 nrow = 2, ncol = 3)
 
 
-ggsave(paste0("output/NMDS/sample_type_microbes_NMDS.pdf"),  plot = g, width = 15, height = 5)
+ggsave("output/NMDS/sample_type_microbes_NMDS.pdf",
+       plot = g, width = 15, height = 5)
 
 
-write.csv(bind_rows(micro_anovas), "output/NMDS/microbe_anova_results.csv")
+write.csv(bind_rows(micro_anovas),
+          "output/permanova/sample_type_microbe_permanova_by_site.csv")
 
 
 # 8. Pair up microbes and metabolites ------------------------------------------
@@ -403,9 +531,11 @@ print( paste("In micro data, but not in chem = ", nrow(micro_no_chem)))
 
 
 # subset both datasets
-pair_chem_phy <- subset_samples(chem_phy, sample_barcode %in% micro_phy@sam_data$sample_barcode)
+pair_chem_phy <- subset_samples(chem_phy,
+                                sample_barcode %in% micro_phy@sam_data$sample_barcode)
 
-pair_micro_phy  <- subset_samples(micro_phy, sample_barcode %in% chem_phy@sam_data$sample_barcode)
+pair_micro_phy  <- subset_samples(micro_phy,
+                                  sample_barcode %in% chem_phy@sam_data$sample_barcode)
 
 # check number samples in both data sets
 nsamples(pair_chem_phy)
@@ -433,6 +563,9 @@ pair_micro_dist <- as.dist(pair_micro_dist)
 
 rm(samples, otus, taxa)
 
+# generate paired chem dist
+pair_chem_dist <- vegdist(veganifyOTU(pair_chem_phy), method = "bray")
+
 ## check that names match
 if (all( sample_names(pair_micro_phy) %in% sample_names(pair_chem_phy) ) ){
   message("chem and micro sample names match")
@@ -440,6 +573,21 @@ if (all( sample_names(pair_micro_phy) %in% sample_names(pair_chem_phy) ) ){
   warning("chem and micro sample names are different")
 )
 
+# write out paired tables
+
+physeq_csv_out(pair_micro_phy, 
+               description = "paired_marine_microbe",
+               outdir = "data/processed/table_exports")
+
+write.csv(as.matrix(pair_micro_dist), 
+          "data/processed/table_exports/paired_marine_microbe_unifrac_dist.csv")
+
+physeq_csv_out(pair_chem_phy,
+               description = "paired_marine_metabolite",
+               outdir = "data/processed/table_exports")
+
+write.csv(as.matrix(pair_chem_dist),
+          "data/processed/table_exports/paired_marine_metabolite_bray_dist.csv")
 
 # 9. NMDS and Mantel of microbes and metabolites ----------------------------------------------
 
@@ -535,23 +683,96 @@ g <-arrangeGrob(grobs = cca_p)
 
 ggsave("output/NMDS/CCA_outlier_comparison.pdf", plot = g)
 
+# plot paired ordination with CCA removed
+
+no_cca_micro <- subset_samples(pair_micro_phy, sample_type != "CCA")
+no_cca_chem <- subset_samples(pair_chem_phy, sample_type != "CCA")
+
+p <- paired_ordination(
+  microbe_phy = no_cca_micro,
+  chem_phy = no_cca_chem,
+  description = "All",
+  shape = "site_name",
+  color = "sample_type",
+  unifrac_dist = pair_micro_dist
+)
+
+g <- arrangeGrob(p$micro, p$chem, p$proc, ncol = 3, nrow = 1)
+
+ggsave("output/NMDS/no_cca_procrustes.pdf", plot = g, width = 15)
 # 11. All microbe heatmap ------------------------------------------------------
 
 plot_heatmap(phyloseq_obj = micro_phy, description = "microbe")
 
 
-# 12. Metabolite eulerr diagram -----------------------------------------------
+# 12. Metabolite and Microbe Eulerr diagrams -----------------------------------------------
+# For corals and algae, generate euler plots by Genus
 
-# merge samples by group
-chem_type_merge <- merge_by_group(chem_phy, "sample_type")
+# merge all samples by sample type (coral, limu, cca)
+all_chem_eul  <- euler_subset(chem_phy, group_by = "sample_type")
 
-chem_type_merge[chem_type_merge >0] <- 1
-
-chem_type_merge <- t(chem_type_merge)
-
-
-type_eul <- euler(chem_type_merge)
+all_micro_eul <- euler_subset(micro_phy, group_by = "sample_type")
 
 pdf("output/Euler/Metabolite_Sample_Type_Euler.pdf")
-plot(type_eul, fills = sample_type_cols, quantities = T)
+print(plot(all_chem_eul, fills = sample_type_cols, quantities = T))
 dev.off()
+
+pdf("output/Euler/Microbe_Sample_Type_Euler.pdf")
+print(plot(all_micro_eul, fills = sample_type_cols, quantities = T))
+dev.off()
+
+
+
+# make a list of euler plots by host genus
+# for each sample type (coral/limu) and data type (metabolite, microbe) 
+eul_plots <- list()
+
+# metabolite
+eul_plots$chem_coral <- euler_subset(chem_phy, group_by = "genus",
+                                     sample_type == "Coral")
+eul_plots$chem_limu  <- euler_subset(chem_phy, group_by = "genus",
+                                     sample_type == "Limu")
+# microbe
+eul_plots$micro_coral <- euler_subset(micro_phy, group_by = "genus",
+                                        sample_type == "Coral")
+eul_plots$micro_limu <- euler_subset(micro_phy, group_by = "genus",
+                                       sample_type == "Limu")
+# write out
+for(p in names(eul_plots)){
+  pdf(paste0("output/Euler/", p, "_genus_euler.pdf"))
+  print(plot(eul_plots[[p]], quantities = T))
+  dev.off()
+}
+
+# 13. Statistics on Metabolite Networks by Sample Type -----------------------------------------------
+# For each metabolite network, run anova and look for fold changes in abundance between sample types
+
+peak_data <- as.data.frame(
+                      as(tax_table(chem_phy), "matrix") )
+unique_networks <- unique(peak_data[peak_data$componentindex != "-1", "componentindex"]) 
+  
+for(a_network in unique_networks) {
+  # subset phyloseq by network
+  network_phy <- subset_taxa(chem_phy,
+                             componentindex == a_network)
+  
+  # transform relative abundance 
+  network_phy <- transform_sample_counts( network_phy,
+                                      fun = function(x)
+                                      asin(sqrt(x)) )
+  
+  # pull out transformed counts and sample type info
+  network_abunds <- t(otu_table(network_phy))
+  network_types <- as.data.frame( sample_data(network_phy) )[, "sample_type"]
+  
+  network_table <- merge(network_abunds, network_types, by = 0)
+  network_table <- network_table[ , -1]
+  
+  # how to combine data within a network.. mean? sum? once collapsed, run aov
+  
+  # build table that shows for each network, mean RA by sample type and which type was 2X higher than the others
+  
+}
+
+
+

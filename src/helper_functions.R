@@ -58,8 +58,12 @@ get_chem_abundance <- function(chem_data = chem_raw, bad_samples = bad_samples){
     colnames(chem_abund)[!(colnames(chem_abund) %in% bad_samples)]
   chem_abund <- chem_abund[, ..good_cols]
   chem_abund <- as.matrix(chem_abund)
+  
   # change row names to cluster index, paste "id_" to prevent indexing confusion
   row.names(chem_abund)<- paste0("id_", chem_raw$`cluster index`)
+  
+  # drop features that aren't present in the dataset anymore
+  chem_abund <- chem_abund[rowSums(chem_abund) > 0,]
   return(chem_abund)
 }
 
@@ -152,6 +156,7 @@ subset_dist <- function(dist_obj, phyloseq_obj){
   
 }
 
+# function plot_heatmap()... plots a heatmap! Currently, using pheatmap. Will update to complexHeatmap
 
 plot_heatmap <-
   function(phyloseq_obj,
@@ -399,7 +404,7 @@ paired_ordination <- function(microbe_phy,
   
 }
 
-# merge by group merges a phyloseq object and outputs the otu table
+# merge_by_group() merges a phyloseq object and outputs the otu table
 merge_by_group <- function(phyloseq_obj, group){
   # merge samples by a group, summing read acounts
   group_phy <- merge_samples(phyloseq_obj, group, fun = sum)
@@ -410,5 +415,18 @@ merge_by_group <- function(phyloseq_obj, group){
   return(group_otus)
 }
 
-# betadisp_group
+# euler_subset() plots a eulerr plot for a phyloseq object
+# plot circles defined using 'group_by', data subset using expression passed with "..."
+
+euler_subset <- function(physeq, group_by = "genus", ...) {
+  type_merge <-
+    suppressWarnings(
+      merge_by_group(subset_samples(physeq, ...), group = group_by))
+  
+  type_merge[type_merge > 0] <- 1
+  type_merge <- t(type_merge)
+  type_eul <- euler(type_merge)
+  return(type_eul)
+}
+
 
