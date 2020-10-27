@@ -2,16 +2,12 @@
 ## Microbes are arrange by phylogeny, metabolites are arranged by qemistree classifcation
 ## Match up all the tip names with heatmap data (correlations)
 ## Pass phylogenies to complexHeatmap as dendrograms
-library(ggplot2)
-library(ggtree)
-library(tidytree)
 library(ape)
 library(data.table)
-library(ggstance)
-library(ggtreeE)
 library(dendextend)
 library(ComplexHeatmap)
 library(phylogram)
+library(tidyr)
 
 detach("package:speedyseq")
 unloadNamespace("speedyseq")
@@ -44,12 +40,10 @@ tip_data <- merge(class_tips, color_tips)
 tip_data <- merge(tip_data, barplot_tips)
 tip_data <- merge(tip_to_feature, tip_data)
 
-qem_tip_data <- tip_data[id %in% qemistree_raw$tip.label]
-
 qem_id_map <- setNames(tip_data$featureID, tip_data$id)
 
 
-# Read MMVEC tables -------------------------------
+# Read MMVEC and correlation tables -------------------------------
 
 # mmvec data (ranks for metabolite microbe correlation)
 mmvec_table <- fread("data/raw/mmvec/Ranks_result.tsv",
@@ -62,13 +56,23 @@ setnames(mmvec_table,
          "featureid",
          "featureID")
 
-# transform mmvec scores to matrix
-mmvec_mat <- as(mmvec_table[ , .SD, .SDcols = !"featureID"], "matrix")
 
-# set the mmvec rownames to ids (which match qemistree) instead of featureID
-# TODO make sure all tips are in mmvec data!
-row.names(mmvec_mat) <- mmvec_table$featureID
+# read Craig correlation table (long format showing pairwise comparisons)
+correl_raw <-read.csv("data/processed/correl.csv")
 
+# clean up and make into wide matrix
+cors <- correl_raw[ ,c("Label", "weight")]
+
+cors$id  <- gsub(".+d-(\\d+).+", "\\1", correl_raw$Label, perl = T)
+cors$otu <- gsub(".*(Otu\\d+).+","\\1", correl_raw$Label, perl = T)
+cors$otu <- gsub("Otu(\\d{4}$)","Otu0\\1", cors$otu)
+
+cors_wide <- reshape(cors[ ,-1], idvar = "id", timevar = "otu", direction = "wide")
+
+row.names(cors_wide) <- cors_wide$id
+colnames(cors_wide) <- sub("weight.","",colnames(cors_wide))
+
+cors_mat <- as(cors_wide[ , -1 ], "matrix")
 
 # Read and Organize Metabolite Qemistree Tree ---------------------------------------------------
 
@@ -78,70 +82,108 @@ qemistree_raw <- read.tree(file = "data/raw/qemistree/qemistree.tree")
 # update tip labels to match the rest of our metabolite data
 qemistree_raw$tip.label <- unname(qem_id_map[qemistree_raw$tip.label])
 
+qem_tip_data <- tip_data[featureID %in% qemistree_raw$tip.label]
 
-# get list of metabolite features that are in mmvec data
-mmvec_feats <- row.names(mmvec_mat)
-
-# check if there are more features in the mmvec table than in qemistree
-length(mmvec_feats)
-Ntip(qemistree_raw)
-
-# get mmvec feats that are present in qemistree
-qem_mmvec_feats <- mmvec_feats[mmvec_feats %in% qemistree_raw$tip.label]
-
-# subset tree to tips that we have mmvec data for
-qemistree_clean <- keep.tip(qemistree_raw, qem_mmvec_feats)
-Ntip(qemistree_clean)
 
 # Read and Organize Microbe FastTree Phylogenetic Tree --------------------------------------------
 
 # read in fastree file
 fastree_raw <- read.tree("data/raw/FastTree_100.tre")
 
-# subset microbe tree to ASVs that were run with mmvec
-mmvec_asvs <- colnames(mmvec_mat)
-fastree_clean <- keep.tip(fastree_raw, mmvec_asvs)
-
-
 # Heatmap of MMVEC Values-----------------------------------------------
-
-# get microbe tree as dendrogram
-micro_dendro <- as.dendrogram.phylo(fastree_clean)
-
-# get metabolite qemistree as dendrogram
-chem_dendro  <- as.dendrogram.phylo(qemistree_clean)
-
 # subset mmvec data to only include ids that are in qemistree
+mmvec_mat <- as(mmvec_table[ , .SD, .SDcols = !"featureID"], "matrix")
+row.names(mmvec_mat) <- mmvec_table$featureID
+
 mmvec_mat <- mmvec_mat[row.names(mmvec_mat) %in% qemistree_clean$tip.label , ]
 
-# generate heatmap
-ht <- Heatmap(
-              mmvec_mat,
-              cluster_rows = chem_dendro,
-              cluster_columns = micro_dendro,
-              # row parameters (metabolite)
-              row_dend_width = unit(4, "in"),
-              row_names_gp = gpar(fontsize = 6),
-              show_row_names = F,
-              # column parameters (microbe)
-              column_dend_height = unit(2, "in"),
-              column_names_gp = gpar(fontsize = 6),
-              show_column_names = F)
-        
 
-# rownames of mmvec table match 'featureID' in tip_data, 
+# normalize  mmvec data
+scale_dat <- function(mat_dat){
+  mat_dat <- t(scale(t(mat_dat)))
+  mat_dat[is.na(mat_dat)] <- 0
+  return(mat_dat)
+}
+
+z_mmvec_mat <- scale_dat(mmvec_mat)
+z_mmvec_mat[1:5, 1:5]
+
+# generate_phymap() makes a complex Heatmap that 'clusters' using phylogenetic trees (or equivalent qemistree)
+# takes metabolites as rows, otus as columns
+
+generate_phymap <- function(micro_tree = fastree_raw, chem_tree = qemistree_raw, correlation_mat = cors_mat){
+ 
+  ## microbe
+  # subset microbe tree to ASVs that are present in correlation matrix and vice versa
+  mat_asvs <- colnames(correlation_mat)
+  
+  micro_tree_asvs <-mat_asvs[ mat_asvs %in% micro_tree$tip.label]
+  
+  micro_tree_clean <- keep.tip(micro_tree, micro_tree_asvs)
+  correlation_mat <- correlation_mat[ , micro_tree_asvs]
+  
+  # microbe tree as dendrogram
+  micro_dendro <- as.dendrogram.phylo(micro_tree_clean)
+  
+  ## chem
+  # subset metabolite tree to features in the correlation matrix and vice versa
+  if(!is.null(chem_tree)){
+  mat_feats <- row.names(correlation_mat)
+  
+  chem_tree_feats <-
+    mat_feats[mat_feats %in% chem_tree$tip.label]
+  
+  chem_tree_clean <- keep.tip(chem_tree, chem_tree_feats)
+  correlation_mat <- correlation_mat[chem_tree_feats , ]
+  
+  
+  # metabolite tree as dendrogram
+  chem_dendro  <- as.dendrogram.phylo(chem_tree_clean)
+  } else {
+    chem_dendro <- as.dendrogram( hclust ( dist( correlation_mat ) ) )
+  }
+  
+  
+  # generate heatmap
+  ht <- Heatmap(
+    correlation_mat,
+    cluster_rows = chem_dendro,
+    cluster_columns = micro_dendro,
+    # row parameters (metabolite)
+    row_dend_width = unit(4, "in"),
+    row_names_gp = gpar(fontsize = 6),
+    show_row_names = F,
+    # column parameters (microbe)
+    column_dend_height = unit(2, "in"),
+    column_names_gp = gpar(fontsize = 6),
+    show_column_names = F,
+    # colors
+    na_col = "white"
+  )
+  return(ht)
+}
+
+# generate heatmaps with and without qemistree
+
+ht_cor <- generate_phymap(correlation_mat = cors_mat)
+
+ht_cor_clust <- generate_phymap(correlation_mat = cors_mat,
+                                chem_tree = NULL)
+
+ht_mmvec <- generate_phymap(correlation_mat = z_mmvec_mat)
+ht_mmvec_clust <- generate_phymap(correlation_mat = z_mmvec_mat, 
+                                  chem_tree = NULL)
+
+# plot phylogeny heatmap
 png(
   filename = "output/heatmap/metabolite_microbe_phylo_heatmap.png",
-  width = 30,
-  height = 30,
-  res = 300,
-  units = "in" )
-print(ht)
+  width = 30, height = 30, res = 300, units = "in" )
+
+print(ht_cor)
+
 dev.off()
 
-# normal clustering heatmap
-ht2 <- Heatmap( mmvec_mat)
-
+# plot cluster heatmap
 
 png(
   filename = "output/heatmap/metabolite_microbe_clust_heatmap.png",
@@ -149,5 +191,5 @@ png(
   height = 25,
   res = 300,
   units = "in" )
-print(ht2)
+print(ht_cor_clust)
 dev.off()
