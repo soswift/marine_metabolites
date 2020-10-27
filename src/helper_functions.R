@@ -160,7 +160,8 @@ subset_dist <- function(dist_obj, phyloseq_obj){
 
 plot_heatmap <-
   function(phyloseq_obj,
-           description=NULL){
+           description=NULL,
+           dist_method = "bray"){
     
     meta <- sample_data(phyloseq_obj)
     otus <- t(as(otu_table(phyloseq_obj), "matrix"))
@@ -196,9 +197,10 @@ plot_heatmap <-
     genus_cols <- get_colors(annotation_row, "Genus", "E")
     
     # generate bray distance matrix, cluster, sort
-    message(paste0("generating distance matrix for ", description))
+    message(paste0("generating ", dist_method, " distance matrix for ", description, "rows"))
+    message("Column clusters based on euclidean distance")
     clust_rows <-
-      hclust(vegdist(otus, method = "bray"), method = "average")
+      hclust(vegdist(otus, method = dist_method), method = "average")
     
     # sort dendrogram so outgroups are more apparent
     clust_rows <- as.hclust(dendsort(as.dendrogram(clust_rows)))

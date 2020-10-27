@@ -1,0 +1,1 @@
+SCNIC_analysis.py modules -i data/processed/correls_marine.txt -o modules_output/ --min_r .2 --table all_marine_metabolite_raw_abundance_transpose.biom

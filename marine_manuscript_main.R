@@ -1,6 +1,6 @@
 # This R script will generate the figures and analyses associated with the Waimea Valley marine microbial communities
 # Began 08/29/2020
-
+# Setup environment ----------------------------------------
 
 # Load libraries
 
@@ -9,13 +9,10 @@ library(data.table)
 library(eulerr)
 library(vegan)
 library(pairwiseAdonis)
+library(tidyr)
 
-#setwd("/home/sean/Documents/Bioinformatics/Projects/SuperTransect/Analysis/marine_manuscript")
-# 1. Load and clean microbial data ----------------------------
-# Load and clean data from the metaflowimcs pipeline.
-# Expects standards pipeline output format.
-# Data is subset to only include desired marine samples.
-# Read counts are subsampled to even depth and relative abundance transformed.
+#library(speedyseq)
+
 
 ## identify data files
 
@@ -48,6 +45,12 @@ source("src/read_unifrac.R")
 # function for formatting microbial data for mmvec
 source("src/format_mmvec.R")
 
+#setwd("/home/sean/Documents/Bioinformatics/Projects/SuperTransect/Analysis/marine_manuscript")
+# 1. Load and clean microbial data ----------------------------
+# Load and clean data from the metaflowimcs pipeline.
+# Expects standards pipeline output format.
+# Data is subset to only include desired marine samples.
+# Read counts are subsampled to even depth and relative abundance transformed.
 
 # read in data and sample data, 
 
@@ -94,6 +97,15 @@ final_marine_phy <- transform_sample_counts(marine_phy_rar,
 # drop sediment and water samples
 final_marine_phy <- subset_samples(final_marine_phy,
                                    sample_type %in% c("Limu","CCA","Coral"))
+
+# Re-classify genera based on our target genera for Limu and Coral
+keep_genera <- c("Jania", "Halimeda","Dichotoma", "Porites", "Monitipora", "Pocillopora")
+
+genus_data <- sample_data(final_marine_phy)$genus
+
+sample_data(final_marine_phy)$genus <- ifelse(genus_data %in% keep_genera,
+                                              genus_data,
+                                              "Other" )
 
 final_marine_phy <- prune_taxa(x = final_marine_phy,
                                taxa = taxa_sums(final_marine_phy) > 0)
@@ -195,7 +207,7 @@ not_blanks <- !grepl("blank",
 
 chem_abund <- chem_abund_w_blanks[ , not_blanks]
 chem_abund <- chem_abund[rowSums(chem_abund) > 0, ]
-
+write.csv(chem_abund, "data/processed/table_exports/all_marine_metabolite_raw_abundance.csv")
 
 # subset metadata to match cleaned abundance
 chem_meta <- chem_meta[match(colnames(chem_abund), chem_meta$sample_barcode)]
@@ -400,15 +412,16 @@ ggsave(paste0("output/NMDS/sample_type_metabolites_NMDS.pdf"),
 
 # Save Point: Load Cleaned Microbe and Metabolite Data----------------------------------------------------------------
 final_marine_phy <- readRDS("data/processed/final_marine_phy.rds")
+micro_phy <- final_marine_phy
 
 final_unifrac <- readRDS("data/processed/final_unifrac.rds")
 
+chem_phy <- readRDS("data/processed/chem_phy.rds")
 
 
 # 6. All microbe NMDS and permanova ---------------------------------------------------------
 
-# phyloseq object
-micro_phy <- final_marine_phy
+
 
 # clean up genera names
 sample_data(micro_phy)$genus <- ifelse(sample_data(micro_phy)$genus %in% keep_genera,
@@ -700,10 +713,12 @@ p <- paired_ordination(
 g <- arrangeGrob(p$micro, p$chem, p$proc, ncol = 3, nrow = 1)
 
 ggsave("output/NMDS/no_cca_procrustes.pdf", plot = g, width = 15)
-# 11. All microbe heatmap ------------------------------------------------------
+# 11. All microbe and metabolite heatmaps ------------------------------------------------------
 
 plot_heatmap(phyloseq_obj = micro_phy, description = "microbe")
 
+plot_heatmap(phyloseq_obj = chem_phy, description = "metabolite",
+             dist_method = "canberra")
 
 # 12. Metabolite and Microbe Eulerr diagrams -----------------------------------------------
 # For corals and algae, generate euler plots by Genus
@@ -731,12 +746,12 @@ eul_plots <- list()
 eul_plots$chem_coral <- euler_subset(chem_phy, group_by = "genus",
                                      sample_type == "Coral")
 eul_plots$chem_limu  <- euler_subset(chem_phy, group_by = "genus",
-                                     sample_type == "Limu")
+                                     sample_type == "Limu" & genus != "Other")
 # microbe
 eul_plots$micro_coral <- euler_subset(micro_phy, group_by = "genus",
                                         sample_type == "Coral")
 eul_plots$micro_limu <- euler_subset(micro_phy, group_by = "genus",
-                                       sample_type == "Limu")
+                                        sample_type == "Limu" & genus != "Other")
 # write out
 for(p in names(eul_plots)){
   pdf(paste0("output/Euler/", p, "_genus_euler.pdf"))
@@ -748,31 +763,194 @@ for(p in names(eul_plots)){
 # For each metabolite network, run anova and look for fold changes in abundance between sample types
 
 peak_data <- as.data.frame(
-                      as(tax_table(chem_phy), "matrix") )
-unique_networks <- unique(peak_data[peak_data$componentindex != "-1", "componentindex"]) 
-  
+                      as(tax_table(chem_phy),
+                         "matrix") )
+
+# sum relative abundance of features in each network
+# phyloseq treats taxonomy as hierarchical, so we need to drop most columns
+# we only need 'componentindex', which is the network and 'cluster index' which is a unique id
+
+tax_mat <- as(tax_table(chem_phy),
+                  "matrix")
+tax_mat <- tax_mat[ , c("componentindex","cluster index")]
+
+net_tax_table <- tax_table(tax_mat)
+
+net_phy <-phyloseq(sample_data(chem_phy),
+                   otu_table(chem_phy),
+                   net_tax_table)
+
+network_merge <- tax_glom(net_phy,
+                            "componentindex")
+
+network_merge <- subset_taxa(network_merge,
+                             componentindex != "  -1")
+
+# the column componentindex identifies the network
+unique_networks <- unique(as(tax_table(network_merge),
+                             "matrix")[,"componentindex"]) 
+
+# for each network, subset data and run anova 
+net_data <- list()
 for(a_network in unique_networks) {
-  # subset phyloseq by network
-  network_phy <- subset_taxa(chem_phy,
+  # subset compounds by network
+  network_phy <- subset_taxa(network_merge,
                              componentindex == a_network)
   
-  # transform relative abundance 
-  network_phy <- transform_sample_counts( network_phy,
-                                      fun = function(x)
-                                      asin(sqrt(x)) )
+  # create a map identifying samples by sample types
+  sample_map <- setNames(sample_data(network_phy)[["sample_type"]],
+                         sample_names(network_phy))
+  sample_types <-c("Limu",
+                   "CCA",
+                   "Coral")
   
-  # pull out transformed counts and sample type info
-  network_abunds <- t(otu_table(network_phy))
-  network_types <- as.data.frame( sample_data(network_phy) )[, "sample_type"]
+  # get mean relative abundance for each sample type present in the network
+  mean_RAs <- list() 
+  for(a_sample_type in sample_types){
+  mean_RAs[[a_sample_type]] <- mean(
+                                 otu_table(
+                                 subset_samples(network_phy,
+                                                sample_type == a_sample_type)))
+  }
   
-  network_table <- merge(network_abunds, network_types, by = 0)
-  network_table <- network_table[ , -1]
+  # prior to modeling, normalize data by transform relative abundances
+  arcsin_phy <- transform_sample_counts(network_phy,
+                                          fun = function(x)
+                                          asin(sqrt(x)) )
+  # pull out transformed counts of sample_types, clean up
+  sample_abunds <- data.frame(t( as(otu_table(arcsin_phy),
+                        "matrix")))
+  sample_abunds[is.na(sample_abunds)] <- 0
   
-  # how to combine data within a network.. mean? sum? once collapsed, run aov
+  # drop samples that don't contain this network
+  #sample_abunds <-sample_abunds[rowSums(sample_abunds) > 0 , ]
   
-  # build table that shows for each network, mean RA by sample type and which type was 2X higher than the others
+  # if the network was only found in one sample, skip it
+  #if(length(sample_abunds) == 1) next
   
+  # make table with columns for sample type and abundance
+  sample_table <- data.frame(sample_type = sample_map[row.names(sample_abunds)],
+                             abundance = sample_abunds[[1]]
+                             )
+  # don't run anova if the network only occurs in one sample type
+  # if(length( unique( sample_table$sample_type ) ) < 2){
+  #   p_val = NA
+  # } else {
+  # run anova on sample type and get relevant outputs
+  aov_out <-  aov(abundance ~ sample_type, data = sample_table)
+  aov_sum <- summary(aov_out)
+  
+  p_val  <- aov_sum[[1]][["Pr(>F)"]][[1]]
+  sum_sq <- aov_sum[[1]]["Sum Sq"][[1,1]]
+  f_val <- aov_sum[[1]]["F value"][1,1]
+  
+  # run tukey HSD to test anova resulst
+  tuk_out <-TukeyHSD(aov_out)
+  
+  # function to calculate fold change while handling zeroes
+  fc <- function(x,y){
+    if(y==0 && x == 0){
+      return(0)
+    }else if(y == 0){
+      return(Inf)
+    }else{
+      return(log2(x/y))
+    }
+  }
+  
+  # assemble the output as a list
+  # it shows for each network, mean RA by sample type, log2 fold changes, anova + tukey results
+  net_data[[a_network]] <- list(
+           network = a_network,
+           limu_RA = mean_RAs$Limu,
+           cca_RA = mean_RAs$CCA,
+           coral_RA = mean_RAs$Coral,
+           FC_LimuVCoral = fc(mean_RAs$Limu, mean_RAs$Coral),
+           FC_LimuVCCA = fc(mean_RAs$Limu, mean_RAs$CCA),
+           FC_CoralVCCA = fc(mean_RAs$Coral, mean_RAs$CCA),
+           tuk_Coral_CCA_diff  = tuk_out[[1]]["Coral-CCA","diff"],
+           tuk_Coral_CCA_p     = tuk_out[[1]]["Coral-CCA","p adj"],
+           tuk_Limu_CCA_diff   = tuk_out[[1]]["Limu-CCA","diff"],
+           tuk_Limu_CCA_p      = tuk_out[[1]]["Limu-CCA","p adj"],
+           tuk_Limu_Coral_diff = tuk_out[[1]]["Limu-Coral","diff"],
+           tuk_Limu_Coral_p    = tuk_out[[1]]["Limu-Coral","p adj"],
+           f_stat = f_val,
+           sum_of_sq = sum_sq,
+           p_val = p_val
+           )
+  
+  
+# }
 }
 
+# put the fold changes for all networks into a nice data.frame
+# note: this does not include networks that only showed up in one sample
 
+network_fold_changes <- do.call(rbind, net_data)
+
+network_fold_changes <-as.data.frame(apply(network_fold_changes, 2, as.numeric))
+# adjust p values using 
+network_fold_changes$adj_p_val <- p.adjust(network_fold_changes$p_val, method = "BH")
+
+write.csv(network_fold_changes,
+          "data/processed/network_anova_and_fold_changes.csv",
+          row.names = F)
+
+
+# 14. Random Forest and Linear Mixed Effect Models ----------------------------
+library(VSURF)
+
+# set seed for parallel
+set.seed(2020, "L'Ecuyer-CMRG")
+
+# read in metabolite abundance (relative abundance of peak areas) and sample data (information on samples)
+# abundance of metabolites will be used to predict sample type (Limu, Coral, CCA)
+
+metabolite_abundance_file <- "data/processed/table_exports/all_marine_metabolite_abundance_flat_table.csv"
+sample_data_file <- "data/processed/table_exports/all_marine_metabolite_sample_flat_table.csv"
+
+abund_raw <- read.csv(metabolite_abundance_file,
+                      header = T,
+                      row.names = 1)
+sam_dat <- read.csv(sample_data_file,
+                    header = T,
+                    row.names = 1)
+
+# clean and arrange abundance data for VSURF random forest 
+abund<- as.data.frame(t(abund_raw))
+
+row.names(sam_dat) <- paste0("X",row.names(sam_dat))
+
+abund_clean <- abund[ row.names(sam_dat), ]
+
+all(row.names(abund) == row.names(sam_dat))
+
+# run VSURF to identify variables for "interpretation"
+# see: https://journal.r-project.org/archive/2015/RJ-2015-018/RJ-2015-018.pdf
+
+vsurf.out <- VSURF(x = abund, y = sam_dat$sample_type,
+                   ncores = 4, parallel = T, clusterType = "FORK")
+
+saveRDS(vsurf.out, "out/sample_type_vsurf.rds")
+
+
+# Run LMER on each metabolite
+
+feats <- colnames(abund_clean)
+
+lmer_abund <- abund_clean
+lmer_abund$sample_type <- sam_dat$sample_type
+lmer_abund$site_name <- sam_dat$site_name
+
+run_lmer <-function(feat_name, lmer_abund){
+  return(
+        lmer(feat_name ~ sample_type +1|site_name,
+             data = lmer_abund)
+        )
+}
+
+lmer.out <-lapply(
+                feats,
+                run_lmer,
+                lmer_abund = lmer_abund)
 
