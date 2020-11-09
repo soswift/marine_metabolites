@@ -1,0 +1,128 @@
+METHODS
+	MMVEC (Ref) was used to determine the conditional probabilities of
+coocurance between microbes and metabolites. MMVEC takes the relative
+abundance matrices of microbes and metabolites across a shared set of samples
+and uses a nerual networking approach to determine the conditional probabilty
+of observing all metabolites based on the observed occurance of each
+microbe. The stated goal of MMVEC is to predict metabolite abundances based on
+the presence of a single microbial taxon. This approach avoids some of the
+pitfalls of traditional correlation methods, including Pearson and Spearman
+correlations. Such analyses are generally inappropriate for analysing compositional data
+and distinct data types, both of which pertain when comparing metabolomics and
+microbial metabarcoding data. In accordance with the recommended use of MMVEC, we
+filtered abundance data to ensure that sufficient observations were provided for coocurance
+analysis. Metabolite input data was limited to features that
+occured in at least 10(?) samples and had a minimum relative abundance of #.
+Microbial data was limited to taxa occuring at a minimum relative abundance of # in at
+least # samples and a minimum single abundance of # in one sample. A total of
+85 samples were considered, which included all collected samples for which both metabolomics and 16S metabarcoding data were available. MMVEC was run with the following parameters: learning rate of 1e3, 30 samples used for testing examples, 200 epochs, a batch size of 5, and 3 latent dimensions.  
+	MMVEC has several built in methods for visualizing microbe and metabolite
+co-occurance patterns. These plots produce ordinations (e.g. PCA) or
+hierarchical clusters (e.g. biclusters).The underlying data used to organize these plots
+are distance matrices based on MMVEC probability
+scores. However, conditional probability scores can also be
+used to identify co-occurance patterns in the more structured context of microbial
+and chemical relatedness. This approach has the potential to reveal patterns in microbe-metabolite
+co-occurance across a microbial gene phylogeny and a tree of chemical relatedness based on spectral
+data. To this end, a bicluster plot of MMVEC scores was assembled in R using the package
+complexHeatmap (REFs, also dendextend, parallel, phylogram). For the plot,
+only metabolites that had a median probability greater than or equal to 2 were
+retained. Microbial taxa were organized phylogenetically using a 16S tree
+assembled with FastTree(Ref). Metabolites were organized by 
+structural similarity using the tree output from Qemistree (Ref). Metabolite
+probability scores were standardized for each metabolite through z-score
+transformation to better visualize the varying probabilty of each metabolite
+associating with microbes across the phylognetic tree. Each cell in the
+bicluster was filled if the z-scored probability was greater than one,
+indicating a co-occurance probability at least one standard deviation higher
+than the mean for that metabolite. In our study, sample were collected from
+distinct host organisms that were likely to produce a high proportion of the observed
+metabolites. To visualize the impact of host organisms on
+cooccurance patterns, filled cells were colored based on proportional
+abundance of microbes and metabolites within the different hosts. If both the
+metabolite and microbe were proportionally most abundant in the same host
+organism, the cell was colored by that sample type. Conversely, if the microbe and
+metabolite were proportionally most abundant in different sample types, the
+filled cell was colored gray and labeled "NS" for 'not same'. This allowed for
+the visual identification of correlation patterns between microbes and
+metabolites that were likely the result of coenrichment in a host versus correlation patterns that were likely
+occuring independent of from host type. For greater context, the microbial
+phylogeny was annotated with taxonomic classifications at the levels of order
+and class. The metabolomic tree was annotated by chemical class and network
+ID. 
+ 
+RESULTS:
+	The bicluster plot showing high co-occurance probabilites (Fig #) structured by microbial 16S phylogeny and
+chemical relatedness (Qemistree) revealed striking patterns in co-occurance
+in both microbial taxonomic groups and in groups of structurally related metabolites.
+Unsurprisingly, metabolites and microbes that had a high co-occurance
+probabilities were frequently found associating with the same host organism. Out
+of the total N positive co-occurance relationships that were identified (>2 raw MMVEC, >1 SD
+z-scored mmvec), X showed a pattern where microbe and metabolite most abundant
+in the same sample type, while Y showed a pattern where microbe and metabolite were most abundant in different sample types.
+Some microbial taxonomic groups were visibly enriched in a particular host
+type. Members of the order Chitinophagales were highly abundant in algae and
+tended to co-occur with metabolites that were also abundant in algae.
+Notably, these Chitiniphagales also co-occured with a number of metabolites that were found
+across multiple sample types. Members of the order Rhizobiales were
+highly abundant in Coral and CCA samples and co-occured with metabolites that
+were abundant in the same. However, closely related taxa in the order Rhodobacterales clearly showed the
+opposite pattern, being most abundant in algae. From the metabolomics perspective, metabolites in
+network Z (componentindex = 186), classfied as Coumarins and derivatives, were highly abundant in 
+CCA and coral and co-occured with a diverse set of taxa that were present in
+those host organisms. Network X (component index = 118) was not highly
+abundant in any particular host type, but co-occured most frequently with
+microbes that were abundant in algae. 
+
+ 
+DISCUSSION:
+	MMVEC probabilty scores confirmed expected co-occurance relationships between
+microbes, metabolites, and host organisms. Microbes and metabolites that had
+high co-occurance probabilitestended to occur at high abundance in the
+same host organisms. Furthermore, several microbial orders were identified
+that co-occured with specific networks of metabolites within specific hosts.
+These results hint at complex metabolic linkages between host organisms and
+microorganisms in nearshore marine systems. For highly complex organisms, such
+as CCA and coral, the line between host and microbiome is blurry. With these
+results can be used to design trageted experiments to determine whether hosts or microbes
+are the source of these metabolites.
+	Co-occurance patterns that did not correspond to high proportional
+abundances in a given host organism were not as common. However, these
+non-host specific co-occurance relationships are of great interest. These
+'true correlations' indicate a co-occurance relationship between metabolites
+and microbes that is independent from the host organism. MMVEC probabilities
+are especially suited to identifying these TRUE CORRELATIONS because
+they do  not require linear relationships between microbial and metabolite
+abundances in order to identify co-occurance. This allows us to identify co-occurance patterns that are not revealed by simple
+regression and would otherwise be counfounded by changes in proportional
+abundance between sample types.
+
+
+MMVEC Notes
+Limitations of other techniques:
+- Traditional correlation techniques have high false positivity rate
+- Techniques are invalid when correlating disparate data types
+- CCA,PLS, Network models, Factor models = difficult to interpret, not on the
+  individual metabolite/microbe scale
+- Pearson/Spearman assume independence btwn interactions -> lots of pairwise
+  comps
+MMVEC's solve:
+- conditional probability of observing all metabolites given that a microbe was
+observed
+- identify most likely metabolite microbe interactions
+- predicts entire metabolite profile based on a single microbe
+- uses interative training to learn these probabilities
+- results are rankable
+Comparisons:
+-MMVEC and Spec-esi only methods to outperform random chance in correctly
+selecting true positive correlations.
+- higher precision + recall than other methods
+- consistent for absolute and relative abundance
+- zero log conditional probability indicates the mean metabolite probability
+  since all probabilities are mean centered
+Biocrust wetting
+- MMVEC can detect co-occurance in relative abundance data, where total
+  biomass can mask positive correlations.
+- MMVEC is better at detecting true positives in these cases
+- Not necessarily a linear relationship between RA of metabolite and microbe,
+  but still gets a high conditional probability

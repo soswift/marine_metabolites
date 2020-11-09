@@ -9,11 +9,6 @@ library(ComplexHeatmap)
 library(phylogram)
 library(circlize)
 
-detach("package:speedyseq")
-unloadNamespace("speedyseq")
-detach("package:phyloseq")
-unloadNamespace("phyloseq")
-
 # Read Qemistree Tables -------------------------------------------------
 # Qemistree output files include plotting information, all organized by unique 'id'
 # Read tables of data related to metabolite qemistree 
@@ -37,53 +32,7 @@ tip_data <- merge(tip_data, peak_data, by = "featureID")
 
 qem_id_map <- setNames(tip_data$featureID, tip_data$id)
 
-# make new column that only shows top 5 classes for plot
-top_classes <- tip_data[class != "unclassified" , .N, by = class][order(-N)][1:10, class]
-
-tip_data$plot_class <- tip_data$class
-tip_data$plot_class[!(tip_data$heatmap_class %in% top_classes)] <- "other"
-
-# Read MMVEC and correlation tables -------------------------------
-
-# MMVEC data (matrix showing pairwise mmvec scores)
-mmvec_table <- fread("data/raw/mmvec/Ranks_result.tsv", key = "featureid")
-
-mmvec_table[ , featureid := sub("metabolite",
-                                "",
-                                featureid)]
-setnames(mmvec_table,
-         "featureid",
-         "featureID")
-
-# Pearson correlation data (long format showing pairwise comparisons)
-correl_raw <-read.csv("data/processed/2347nodes.780kedges.pvals.csv")
-
-# clean
-correl_raw$featureID  <- gsub( ".+d-(\\d+).*", "\\1", 
-                               correl_raw$Label,
-                               perl = T)
-correl_raw$OTU_ID <- gsub( ".*(Otu\\d+).+","\\1", 
-                           correl_raw$Label,
-                           perl = T)
-correl_raw$OTU_ID <- gsub( "Otu(\\d{4}$)","Otu0\\1", 
-                           cors$OTU_ID)
-
-# subset columns and coerce into wide matrix
-cors <- correl_raw[ , c("featureID",
-                        "OTU_ID", 
-                        "pearson")]
-
-cors_wide <- reshape(cors,
-                     idvar = "featureID",
-                     timevar = "OTU_ID",
-                     direction = "wide")
-
-row.names(cors_wide) <- cors_wide$featureID
-colnames(cors_wide)  <- sub("pearson.","",colnames(cors_wide))
-
-
 # Read and Organize Metabolite Qemistree Tree ---------------------------------------------------
-
 # read in qemistree tree file 
 qemistree_raw <- read.tree(file = "data/raw/qemistree/qemistree.tree")
 
@@ -93,9 +42,7 @@ qem_tip_data <- tip_data[featureID %in% qemistree_raw$tip.label]
 
 qemistree_raw <- drop.tip(qemistree_raw, tip_data[class == "unclassified", featureID])
 
-
 # Read and Organize Microbe FastTree Phylogenetic Tree --------------------------------------------
-
 # read in fastree file
 fastree_raw <- read.tree("data/raw/FastTree_100.tre")
 
@@ -109,37 +56,90 @@ setnames(asv_table, "V1", "OTU_ID")
 micro_abund <- read.csv("data/processed/table_exports/paired_marine_microbe_abundance_flat_table.csv",
                         row.names = 1)
 micro_abund <- as.matrix(micro_abund)
+colnames(micro_abund) <- sub("X","",colnames(micro_abund))
+
+# sample data
+sample_dat <- read.csv("data/processed/table_exports/paired_marine_microbe_sample_flat_table.csv")
 
 # metabolite relative abundance
 chem_abund <- read.csv("data/processed/table_exports/paired_marine_metabolite_abundance_flat_table.csv",
                        row.names = 1)
 chem_abund  <- as.matrix(chem_abund)
+colnames(chem_abund) <- sub("X","",colnames(chem_abund))
+row.names(chem_abund) <- sub("id_","",row.names(chem_abund))
+
+# match order of microbe samples and metabolite samples
 micro_abund <- micro_abund[ , colnames(chem_abund)]
 
 # check samples match
-colnames(micro_abund) == colnames(chem_abund)
+all(colnames(micro_abund) == colnames(chem_abund))
+
+# get_sums() aggregates a matrix and generates sums by a metadata category
+get_sums <- function(abundance, group_col, id_col, meta, new_name){
+  abund_dt <- as.data.table(t(abundance), keep.rownames = T)
+  abund_dt$group_vec <- meta[ match(abund_dt$rn, meta[[id_col]]), group_col ]
+  abund_dt[, rn:=NULL]
+  abund_dt <- melt.data.table(abund_dt,
+                              id.vars = "group_vec", 
+                              variable.name = "ID",
+                              value.name = "abund")
+  abund_dt[ , sum(abund), by = .(group_vec, ID)]
+  abund_dt <- dcast(abund_dt, ID ~ group_vec,
+                    value.var = "abund",
+                    fun.aggregate = sum)
+  setnames(abund_dt, "ID", new_name)
+  return(abund_dt)
+}
+
+# get sample type sums for microbes and metabolites
+# use these for barplots on the heatmap and to identify realtionsips betwen sample types
+micro_sums <- get_sums(micro_abund,
+                        group_col = "sample_type",
+                        id_col = "sample_barcode",
+                        meta = sample_dat,
+                        new_name = "OTU_ID")
+chem_sums <- get_sums(chem_abund,
+                        group_col = "sample_type",
+                        id_col = "sample_barcode",
+                        meta = sample_dat,
+                       new_name = "featureID")
+
+# top_levels() makes updates a vector so that it only shows the top n categories
+# useful for limiting colors in a plot
+top_levels <- function(Vec, N = 10, exclude = "unclassified"){
+  top_levels <-names(sort(table(Vec), decreasing = T)[1:N])
+  Vec[!(Vec %in% top_levels) | Vec %in% exclude] <- "other"
+  return(Vec)
+}
+
+
+# Read MMVEC and correlation tables -------------------------------
+
+# MMVEC data (matrix showing pairwise mmvec scores)
+mmvec_table <- fread("data/raw/mmvec/Ranks_result.tsv", key = "featureid")
+
+mmvec_table[ , featureid := sub("metabolite",
+                                "",
+                                featureid)]
+setnames(mmvec_table,
+         "featureid",
+         "featureID")
+
+## Read Spearman correlations from 'parallel_cor.R'
+all_cors <- readRDS("data/processed/all_cors_cutoff.rds")
 
 # Filter Matrix For Heatmap-----------------------------------------------
+## Subset correlation matrices to match qemistree and filter out uninteresting metabolites
 
-# Correlation matrix
-cors_mat <- as(cors_wide[ , -1 ], "matrix")
-
-# MMVEC matrix
+# transform MMVEC scores to matrix
 mmvec_mat <- as(mmvec_table[ , .SD, .SDcols = !"featureID"], "matrix")
 row.names(mmvec_mat) <- mmvec_table$featureID
 
-## Subset correlation matrices to match qemistree and filter out noise
 # Subset mmvec data to only include ids that are in qemistree and ASV metadata
 # Also remove metabolites with a median mmvec score of <2
-mmvec_mat <- mmvec_mat[row.names(mmvec_mat) %in% qemistree_raw$tip.label , 
+mmvec_mat <- mmvec_mat[row.names(mmvec_mat) %in% qemistree_raw$tip.label ,
                        colnames(mmvec_mat) %in% asv_table$OTU_ID]
 mmvec_mat <- mmvec_mat[apply(mmvec_mat, 1, median) >= 2 , ]
-
-# For spearman data, subset by qemistree and ASVs
-# Also remove metabolites with < 10 r values > 0.3
-cors_mat <- cors_mat[row.names(cors_mat) %in% qemistree_raw$tip.label , 
-                     colnames(cors_mat) %in% asv_table$OTU_ID]
-cors_mat <- cors_mat[apply(cors_mat, 1, function(x) length(x > 0.3) > 10 ) , ]
 
 ## normalize mmvec data
 scale_dat <- function(mat_dat){
@@ -150,6 +150,90 @@ scale_dat <- function(mat_dat){
 
 z_mmvec_mat <- scale_dat(mmvec_mat)
 
+# Spearman correlations: transform to matrix
+all_cors_mat <- t(do.call(rbind, all_cors))
+all_cors_mat[is.na(all_cors_mat)] <- 0
+all_cors_mat[all_cors_mat < 0] <- 0
+row.names(all_cors_mat) <- sub("id_", "", row.names(all_cors_mat))
+
+# subset by qemistree tips and ASV metadata table
+# Also remove microbes/metabolites with < 10 r values > 0.33 and any empty columns ( 0 correlation microbes)
+
+all_cors_mat <- all_cors_mat[row.names(all_cors_mat) %in% qemistree_raw$tip.label,
+                             colnames(all_cors_mat) %in% asv_table$OTU_ID]
+
+# To compare spearman and mmvec, get the spearman scores for a matrix matching the mmvec matrix
+match_cors <- all_cors_mat[match(row.names(z_mmvec_mat), row.names(all_cors_mat)), 
+                           match(colnames(z_mmvec_mat), colnames(all_cors_mat))]
+any(is.na(c(colnames(match_cors),row.names(match_cors))))
+
+# independent from mmvec, cull down the correlation scores by cutoff criteria
+all_cors_mat <- all_cors_mat[ apply(all_cors_mat, 1, 
+                                    function(x) length(x[x > 0.33]) > 10) ,
+                              apply(all_cors_mat, 2, function(x) length(x[x >0.33]) > 10)]
+
+
+write.csv(all_cors_mat, "data/processed/spearman_correlations.csv")
+
+
+# Generate Categorical Matrix -------------------------------------------------------------------
+
+# get_top_type() returns the name of the highest sum for each row
+# assumes the first column is an ID name, subsequent columns are sums by type
+get_top_type <- function(type_sums){
+ type_names <- colnames(type_sums[ , -1])
+ top_types <-apply( type_sums[ , -1], 1, function(x) type_names[which.max(x)])
+ names(top_types) <- type_sums[[1]]
+ return(top_types)
+}
+
+micro_top_type <- get_top_type(micro_sums)
+chem_top_type  <- get_top_type(chem_sums)
+
+# type_match() takes the assigned types of microbes/metabolites and a matrix showing correlations between the two
+# if types are the same, returns type name, if different returns "NS"
+# results are filtered based on a correlation cutoff point (e.g. r = 0.4)
+type_match <- function(mi_type, me_type, cor_mat, cutoff = 0.4){
+
+  # full matrices of microbe x metabolite indicating types for each
+  mim <- t(matrix(rep(mi_type, times =  length(me_type)),
+                ncol = length(me_type),
+                dimnames = list(names(mi_type), names(me_type))))
+  
+  mem <- matrix(rep(me_type, length(mi_type)),
+                ncol = length(mi_type),
+                dimnames = list(names(me_type), names(mi_type)))
+  # check equal
+  all(colnames(mim) == colnames(mem))
+  
+  # if types in the matrices don't match, replace with "NS" for 'Not Same'
+  mimem <- mem
+  mimem[mimem != mim] <- "NS"
+  
+  # match to correlation matrix
+  mimem <- mimem[row.names(cor_mat), colnames(cor_mat)]
+  
+  # replace value with "NA" if below cutoff
+  mimem[cor_mat < cutoff] <- NA
+  return(mimem)
+}
+
+type_cat_mat <- type_match(mi_type = micro_top_type,
+                           me_type = chem_top_type,
+                           cor_mat = all_cors_mat,
+                           cutoff = 0.4)
+
+z_cat_mat <- type_match(mi_type = micro_top_type,
+                        me_type = chem_top_type,
+                        cor_mat = z_mmvec_mat,
+                        cutoff = 1)
+
+cat_match_mat <- type_match(mi_type = micro_top_type,
+                            me_type = chem_top_type,
+                            cor_mat = match_cors,
+                            cutoff = 0.4)
+
+
 # Generate Heatmaps ----------------------------------------------
 # generate_phymap() makes a complex Heatmap that 'clusters' using phylogenetic trees (or equivalent qemistree)
 # takes matrix where metabolites are rows, otus are columns, trees for both as dendrograms.
@@ -157,15 +241,26 @@ z_mmvec_mat <- scale_dat(mmvec_mat)
 # 'meta' files are used for annotation.
 generate_phymap <- function(micro_tree = fastree_raw,
                             chem_tree = qemistree_raw,
-                            correlation_mat = cors_mat,
+                            correlation_mat = all_cors_mat,
                             micro_meta = asv_table,
                             chem_meta = tip_data,
-                            chem_anno = "plot_class",
-                            micro_anno = "class"){
+                            micro_b = micro_sums,
+                            chem_b = chem_sums,
+                            n_col = 15){
   
-  # color scheme
-  col_fun <- circlize::colorRamp2( c(0, 2),
+  # define sample type color scheme
+  type_cols <- structure(c("#6469ed", "#e49c4c", "#7cc854","#808080"),
+                         names = c("CCA","Coral","Limu","NS"))
+  
+  # color scheme depends on data type
+  
+  if(class(correlation_mat[1]) == "numeric"){
+  col_fun <- circlize::colorRamp2( c(0, 1),
                        c("white","black"))
+  }
+  if(class(correlation_mat[1]) == "character"){
+  col_fun <- type_cols
+  }
   
   ## Microbe Tree
   # if tree is provided
@@ -211,21 +306,58 @@ generate_phymap <- function(micro_tree = fastree_raw,
   correlation_mat <- correlation_mat[ labels(chem_dendro),
                                       labels(micro_dendro)]
   
-  # arrange metadata to match correlation matrix
+  # arrange metadata and barplots to match the correlation matrix and dendrograms
   chem_meta <- chem_meta[ match( labels(chem_dendro),
                                  chem_meta$featureID) , ]
+  chem_b <- as.matrix(chem_b[match(labels(chem_dendro),
+                               chem_b$featureID) , .(CCA,Coral,Limu)])
   
   micro_meta <- micro_meta[ match(labels(micro_dendro),
                                   micro_meta$OTU_ID) , ]
+  micro_b <- as.matrix( micro_b[ match(labels(micro_dendro),
+                                  micro_b$OTU_ID) , .(CCA,Coral,Limu) ])
   
+  # relativize bars
+  chem_b  <- t(apply(chem_b, 1,
+                     FUN =  function(x) x/sum(x)))
+  micro_b <- t(apply(micro_b, 1,
+                     FUN =  function(x) x/sum(x)))
   
-  # metabolite row annotation
+   # metabolite row annotation
   ha_row <- rowAnnotation(
-    class = chem_meta[[chem_anno]])
+   Class = top_levels(chem_meta$class),
+   Network = top_levels(chem_meta$componentindex,
+                        exclude = "  -1",
+                        N = 30),
+   # stacked barplots
+   Sample_Type = anno_barplot(
+     apply(chem_b, 2, as.numeric),
+     gp = gpar(
+       fill = type_cols,
+       col = type_cols,
+       option = "A"),
+     border = F,
+     bar_width = 0.7,
+     width = unit(1, "in")
+    )
+   )
   
   # microbe column annotation
   ha_col <- columnAnnotation(
-    class = micro_meta[[micro_anno]])
+    Class = top_levels(micro_meta$class, N = n_col),
+    Order = top_levels(micro_meta$order, N = n_col),
+    # stacked barplots
+    Sample_type = anno_barplot(
+      micro_b,
+      gp = gpar(
+        fill = type_cols,
+        col = type_cols,
+        option = "A"),
+      border = F,
+      bar_width = 0.7,
+      height = unit(1, "in")
+      )
+    )
   
   # generate heatmap
   ht <- Heatmap(
@@ -239,50 +371,64 @@ generate_phymap <- function(micro_tree = fastree_raw,
     show_row_names = F,
     
     # column parameters (microbe)
-    column_dend_height = unit(2, "in"),
+    column_dend_height = unit(4, "in"),
     column_names_gp = gpar(fontsize = 6),
     show_column_names = F,
+    
     # colors
     na_col = "white",
     col = col_fun,
     # annotations
     top_annotation =  ha_col,
-    left_annotation = ha_row
+    right_annotation = ha_row
   )
   
-  print(paste0("Total tips in Qemistree:","  ",Ntip(chem_tree_clean)))
-  print(paste0("Total tips in 16S phylogeny:", "  ", Ntip(micro_tree_clean)))
+  print(paste0("Total tips in Qemistree:","  ",length(labels(chem_dendro))))
+  print(paste0("Total tips in 16S phylogeny:", "  ", length(labels(micro_dendro))))
   
-  return(ht)
+  return(list(heatmap = ht, matrix = correlation_mat))
 }
+
+
 
 # save_heatmap() saves a heatmap as png with specified filename
-save_heatmap <- function(heatmap, filename, outdir = "output/heatmap/"){
-  png(filename = paste0(outdir,filename),
-      width = 30, height = 30, res = 300, units = "in" )
-  print(heatmap)
+save_heatmap <- function(heatmap,
+                         filename,
+                         outdir = "output/heatmap/",
+                         csv = F){
+  # save image
+  png(filename = paste0(outdir,filename,".png"),
+      width = 30, height = 25, res = 300, units = "in" )
+  print(heatmap[[1]])
   dev.off()
+  if(isTRUE(csv)){
+  # write data
+  write.csv(heatmap[2], paste0(outdir, filename, ".csv"))
+  }
 }
 
-## Generate heatmaps with and without qemistree
-# Pearson
-ht_cor <- generate_phymap(correlation_mat = cors_mat)
-save_heatmap( ht_cor, "micro_meta_heatmap_pearson_qemistree.png")
 
-ht_cor_clust <- generate_phymap(correlation_mat = cors_mat,
-                                chem_tree = NULL)
-save_heatmap( ht_cor_clust, "micro_meta_heatmap_pearson_hclust.png")
+## Generate heatmaps with and without qemistree
+# Spearman
+# ht_cor <- generate_phymap(correlation_mat = all_cors_mat)
+# save_heatmap( ht_cor, "micro_meta_heatmap_spearman_qemistree")
+
+# Categorical Spearman (i.e. top types)
+ht_cat_cor <- generate_phymap(correlation_mat = type_cat_mat)
+save_heatmap( ht_cat_cor, "sample_type_heatmap_spearman_qemistree")
+
 
 # MMVEC
-ht_mmvec <- generate_phymap(correlation_mat = z_mmvec_mat)
-save_heatmap(ht_mmvec, "micro_meta_heatmap_mmvec_qemistree.png")
+# ht_mmvec <- generate_phymap(correlation_mat = z_mmvec_mat)
+# save_heatmap(ht_mmvec, "micro_meta_heatmap_mmvec_qemistree.png")
 
-ht_mmvec_clust <- generate_phymap(correlation_mat = z_mmvec_mat, 
-                                  chem_tree = NULL)
-save_heatmap(ht_mmvec_clust, "micro_meta_heatmap_mmvec_hclust.png")
+ht_cat_mmvec <- generate_phymap(correlation_mat = z_cat_mat)
+save_heatmap(ht_cat_mmvec, "sample_type_heatmap_zmmvec_qemistree")
 
-ht_raw_mmvec <- generate_phymap(correlation_mat = mmvec_mat)
-save_heatmap(ht_raw_mmvec, "raw_mmvec_qemistree.png")
+# Matching Spearman to MMVE
+ht_cat_mmvec <- generate_phymap(correlation_mat = cat_match_mat)
+save_heatmap(ht_cat_mmvec, "sample_type_heatmap_matching_spearman_qemistree")
+
 
 # Identifying Noteworthy Metabolites ------------------------------------------
 
@@ -304,7 +450,12 @@ setnames(mmvec_table_long,
          c("OTU_ID", "raw_mmvec"))
 
 # pearson correlations
-cors_table_long <- as.data.table(correl_raw)
+cors_table <- as.data.table(all_cors_mat, keep.rownames = T)
+setnames(cors_table, "rn", "featureID")
+cors_table_long <- melt.data.table(cors_table, 
+                                   id.vars = "featureID",
+                                   variable.name = "OTU_ID",
+                                   value.name = "spearman")
 
 # put it all together so we can filter microbe/metabolite associtations by various criteria
 pair_dat <- merge(z_mmvec_table_long, mmvec_table_long,
@@ -329,17 +480,11 @@ pair_dat <- merge(pair_dat, asv_table,
 
 ## Filtering criteria:
 # high raw mmvec probability
-# high pearson rm significant pearson p, and high n
+# high spearman
 # library hit for the metabolite and well classified
 names(pair_dat)
 
-top_pairs <- pair_dat[ 
-  abs(raw_mmvec) > sd(raw_mmvec) + mean(raw_mmvec) 
-  & abs(z_mmvec) > 0.5 
-  & abs(pearson) > 0.7
-  & pval < 0.05 
-  & ms2_library_match != "missing"
-  ]
+top_pairs <- cors_table_long[spearman > 0.9][1:20]
 
 # Graph of microbe abundance vs. metabolite abundance should look pretty
 # graph_pair() takes a row from the paired data table and makes an x/y plot
@@ -348,15 +493,19 @@ graph_pair <-
            chem_dat = chem_abund,
            micro_dat = micro_abund) {
     
-    OTU = pairs_dat$OTU_ID
-    Feature = pairs_dat$featureID
+    OTU = pairs_dat$OTU_ID[1]
+    Feature = pairs_dat$featureID[1]
+    
+    x = chem_dat[row.names(chem_dat) == Feature ,]
+    y = micro_dat[row.names(micro_dat) == OTU ,]
     
     print(plot(
-      x = log(chem_dat[paste0("id_", Feature),]),
-      y = log(micro_dat[OTU ,]),
+      x = x,
+      y = y,
       main = paste(OTU, "vs.", "Metabolite Feature", Feature),
       sub = paste("Taxonomic Family:", pairs_dat$family,
-                  "Chemical Class:", pairs_dat$class.x),
+                  "Chemical Class:", pairs_dat$class.x, "Spearman:",
+                  cor(x,y, method = "spearman")),
       xlab = "Log Metabolite RA",
       ylab = "Log OTU RA"
     ))
@@ -365,9 +514,7 @@ graph_pair <-
 # write out plots for all selected pairs of metabolites and microbes
 pdf("output/Correlations/top_pairs_linear_plots.pdf")
 for (i in 1:nrow(top_pairs)) {
-  
   graph_pair(top_pairs[i])
-  
 }
 dev.off()
 
