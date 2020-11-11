@@ -39,8 +39,6 @@ site_cols <- c()
 
 # function get_chem_abundance() separates feature abundance from feature metadata
 get_chem_abundance <- function(chem_data = chem_raw, bad_samples = bad_samples){
-  
-
   # pull out the abundances
   abund_cols <-
     colnames(chem_data)[grepl("Peak area", colnames(chem_data))]
@@ -67,7 +65,7 @@ get_chem_abundance <- function(chem_data = chem_raw, bad_samples = bad_samples){
 
 get_chem_peak_data <- function(chem_data = chem_raw, feature_names = row.names(chem_abund)){
   peak_data_cols <- colnames(chem_data)[!grepl("Peak area", colnames(chem_data))]
-  chem_peaks <- chem_raw[ , ..peak_data_cols]
+  chem_peaks <- chem_data[ , ..peak_data_cols]
   chem_peaks <- as.matrix(chem_peaks)
   row.names(chem_peaks) <- paste0("id_", chem_raw$`cluster index`)
   return(chem_peaks)

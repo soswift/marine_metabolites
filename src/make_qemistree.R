@@ -126,7 +126,7 @@ setnames(mmvec_table,
          "featureID")
 
 ## Read Spearman correlations from 'parallel_cor.R'
-all_cors <- readRDS("data/processed/all_cors_cutoff.rds")
+# all_cors <- readRDS("data/processed/all_cors_cutoff.rds")
 
 # Filter Matrix For Heatmap-----------------------------------------------
 ## Subset correlation matrices to match qemistree and filter out uninteresting metabolites
@@ -151,29 +151,29 @@ scale_dat <- function(mat_dat){
 z_mmvec_mat <- scale_dat(mmvec_mat)
 
 # Spearman correlations: transform to matrix
-all_cors_mat <- t(do.call(rbind, all_cors))
-all_cors_mat[is.na(all_cors_mat)] <- 0
-all_cors_mat[all_cors_mat < 0] <- 0
-row.names(all_cors_mat) <- sub("id_", "", row.names(all_cors_mat))
-
-# subset by qemistree tips and ASV metadata table
-# Also remove microbes/metabolites with < 10 r values > 0.33 and any empty columns ( 0 correlation microbes)
-
-all_cors_mat <- all_cors_mat[row.names(all_cors_mat) %in% qemistree_raw$tip.label,
-                             colnames(all_cors_mat) %in% asv_table$OTU_ID]
-
-# To compare spearman and mmvec, get the spearman scores for a matrix matching the mmvec matrix
-match_cors <- all_cors_mat[match(row.names(z_mmvec_mat), row.names(all_cors_mat)), 
-                           match(colnames(z_mmvec_mat), colnames(all_cors_mat))]
-any(is.na(c(colnames(match_cors),row.names(match_cors))))
-
-# independent from mmvec, cull down the correlation scores by cutoff criteria
-all_cors_mat <- all_cors_mat[ apply(all_cors_mat, 1, 
-                                    function(x) length(x[x > 0.33]) > 10) ,
-                              apply(all_cors_mat, 2, function(x) length(x[x >0.33]) > 10)]
-
-
-write.csv(all_cors_mat, "data/processed/spearman_correlations.csv")
+# all_cors_mat <- t(do.call(rbind, all_cors))
+# all_cors_mat[is.na(all_cors_mat)] <- 0
+# all_cors_mat[all_cors_mat < 0] <- 0
+# row.names(all_cors_mat) <- sub("id_", "", row.names(all_cors_mat))
+# 
+# # subset by qemistree tips and ASV metadata table
+# # Also remove microbes/metabolites with < 10 r values > 0.33 and any empty columns ( 0 correlation microbes)
+# 
+# all_cors_mat <- all_cors_mat[row.names(all_cors_mat) %in% qemistree_raw$tip.label,
+#                              colnames(all_cors_mat) %in% asv_table$OTU_ID]
+# 
+# # To compare spearman and mmvec, get the spearman scores for a matrix matching the mmvec matrix
+# match_cors <- all_cors_mat[match(row.names(z_mmvec_mat), row.names(all_cors_mat)), 
+#                            match(colnames(z_mmvec_mat), colnames(all_cors_mat))]
+# any(is.na(c(colnames(match_cors),row.names(match_cors))))
+# 
+# # independent from mmvec, cull down the correlation scores by cutoff criteria
+# all_cors_mat <- all_cors_mat[ apply(all_cors_mat, 1, 
+#                                     function(x) length(x[x > 0.33]) > 10) ,
+#                               apply(all_cors_mat, 2, function(x) length(x[x >0.33]) > 10)]
+# 
+# 
+# write.csv(all_cors_mat, "data/processed/spearman_correlations.csv")
 
 
 # Generate Categorical Matrix -------------------------------------------------------------------
@@ -239,14 +239,22 @@ cat_match_mat <- type_match(mi_type = micro_top_type,
 # takes matrix where metabolites are rows, otus are columns, trees for both as dendrograms.
 # If either tree is null, defaults to hclust.
 # 'meta' files are used for annotation.
-generate_phymap <- function(micro_tree = fastree_raw,
+generate_phymap <- function(# dendrograms
+                            micro_tree = fastree_raw,
                             chem_tree = qemistree_raw,
+                            # correlation matrix
                             correlation_mat = all_cors_mat,
+                            # annotation data
                             micro_meta = asv_table,
                             chem_meta = tip_data,
+                            # number of annotation values to display
+                            n_col = 20,
+                            # barchart sums
                             micro_b = micro_sums,
                             chem_b = chem_sums,
-                            n_col = 15){
+                            # abunce tables for boxplots
+                            chem_RA = chem_abund,
+                            micro_RA= micro_abund){
   
   # define sample type color scheme
   type_cols <- structure(c("#6469ed", "#e49c4c", "#7cc854","#808080"),
@@ -317,14 +325,14 @@ generate_phymap <- function(micro_tree = fastree_raw,
   micro_b <- as.matrix( micro_b[ match(labels(micro_dendro),
                                   micro_b$OTU_ID) , .(CCA,Coral,Limu) ])
   
-  # relativize bars
+  # relativize values for stacked barplots
   chem_b  <- t(apply(chem_b, 1,
                      FUN =  function(x) x/sum(x)))
   micro_b <- t(apply(micro_b, 1,
                      FUN =  function(x) x/sum(x)))
   
    # metabolite row annotation
-  ha_row <- rowAnnotation(
+   ha_row <- rowAnnotation(
    Class = top_levels(chem_meta$class),
    Network = top_levels(chem_meta$componentindex,
                         exclude = "  -1",
@@ -414,9 +422,8 @@ save_heatmap <- function(heatmap,
 # save_heatmap( ht_cor, "micro_meta_heatmap_spearman_qemistree")
 
 # Categorical Spearman (i.e. top types)
-ht_cat_cor <- generate_phymap(correlation_mat = type_cat_mat)
-save_heatmap( ht_cat_cor, "sample_type_heatmap_spearman_qemistree")
-
+# ht_cat_cor <- generate_phymap(correlation_mat = type_cat_mat)
+# save_heatmap( ht_cat_cor, "sample_type_heatmap_spearman_qemistree")
 
 # MMVEC
 # ht_mmvec <- generate_phymap(correlation_mat = z_mmvec_mat)
@@ -429,6 +436,177 @@ save_heatmap(ht_cat_mmvec, "sample_type_heatmap_zmmvec_qemistree")
 ht_cat_mmvec <- generate_phymap(correlation_mat = cat_match_mat)
 save_heatmap(ht_cat_mmvec, "sample_type_heatmap_matching_spearman_qemistree")
 
+# Zoomed In Heatmap -------------------------------------
+## Define functions for adding box plots:
+
+# sub_cor_mat() subsets corrlation matrix based on metadata groups
+sub_cor_mat <- function(cor_mat = z_cat_mat,
+                        chem_col = "class",
+                        micro_col = "order",
+                        chem_val = cool_class,
+                        micro_val = cool_order) {
+  cor_mat[row.names(cor_mat) %in% tip_data$featureID[tip_data[[chem_col]] %in% chem_val],
+          colnames(cor_mat) %in% asv_table$OTU_ID[asv_table[[micro_col]] %in% micro_val]]
+}
+
+# abund_by_group() pulls out abundance matrices for metabolites/microbes for each sample group
+abund_by_group <- function(cor_mat = z_cat_mat,
+                           m_abund = micro_abund,
+                           c_abund = chem_abund,
+                           meta = sample_dat,
+                           group = "sample_type",
+                           sample_col = "sample_barcode",
+                           id_col = "featureID"
+                           ) {
+  # match abundance matrices to the correlation matrix
+  m_abund <- m_abund[match(colnames(cor_mat), row.names(m_abund)), ]
+  c_abund <- c_abund[match(row.names(cor_mat), row.names(c_abund)), ]
+  
+  # transform to log10
+  m_abund <- log10(1e-06 + m_abund)
+  c_abund <- log10(1e-06 + c_abund)
+  # vector of grouping ids
+  group_vec <- meta[[group]]
+  # for each group, get sample names
+  group_samples <- lapply(unique(group_vec), function(x) {
+                            meta[[sample_col]][group_vec == x]
+  })
+  names(group_samples) <- unique(group_vec)
+  # pull out microbe and metabolite abundances for each group of samples
+  abund_list  <- lapply(group_samples, function(grp) {
+                    list(
+                      chem = c_abund[ , colnames(c_abund) %in% grp],
+                      micro = m_abund[ , colnames(m_abund) %in% grp]
+                      )
+  })
+  # return list of microbe and metabolite abundance matrices
+  return(abund_list)
+}
+
+# chem_box_plots() generates metabolite box plots for annotating rows
+chem_box_plots = function(index) {
+  pushViewport(viewport(xscale = rg,
+                        yscale = c(0.5, nr + 0.5)))
+  for(i in seq_along(index)) {
+    grid.rect(y = nr-i+1, height = 1, default.units = "native")
+    # CCA
+    grid.boxplot(abund_list$CCA$chem[i, ],
+                 pos = nr-i+1 - 0.2,
+                 box_width = 0.2, 
+                 gp = gpar(fill = "blue"),
+                 direction = "horizontal")
+    # Coral
+    grid.boxplot(abund_list$Coral$chem[i, ],
+                 pos = nr-i+1 + 0,
+                 box_width = 0.2, 
+                 gp = gpar(fill = "orange"),
+                 direction = "horizontal")
+    # Limu
+    grid.boxplot(abund_list$Limu$chem[i, ],
+                 pos = nr-i+1 + 0.2,
+                 box_width = 0.2, 
+                 gp = gpar(fill = "green"),
+                 direction = "horizontal"
+                 )
+  }
+  grid.xaxis()
+  popViewport()
+}
+
+# micro_box_plots() generates microbe box plots for annotating heatmap columns
+micro_box_plots = function(index) {
+  pushViewport(viewport(xscale = rg,
+                        yscale = c(0.5, nr + 0.5)))
+  for(i in seq_along(index)) {
+    grid.rect(y = nr-i + 1,
+              height = 1,
+              default.units = "native")
+    # CCA
+    grid.boxplot(abund_list$CCA$micro[i],
+                 pos = nr-i+ 1 + 0.2,
+                 box_width = 0.2, 
+                 gp = gpar(fill = "blue"),
+                 direction = "horizontal")
+    # Coral
+    grid.boxplot(abund_list$Coral$micro[i],
+                 pos = nr-i+1 - 0.2,
+                 box_width = 0.2, 
+                 gp = gpar(fill = "orange"),
+                 direction = "horizontal")
+    # Limu
+    grid.boxplot(abund_list$Limu$micro[i],
+                 pos = nr-i+1 - 0.2,
+                 box_width = 0.2, 
+                 gp = gpar(fill = "green"),
+                 direction = "horizontal"
+    )
+  }
+  grid.xaxis()
+  popViewport()
+}
+
+# add_boxplots() is a wrapper function for adding annotations
+# the *_box_plots() functions require a variable named 'abund_list'
+# this function allows that to be defined locally instead of globally
+# Provide the heatmap, correlation matrix used to construct heatmap, and
+# list of abundances by group generated with abund_by_group()
+
+add_boxplots <- function(base_heatmap, abund_list){
+  nr <<- nrow(base_heatmap[[2]])
+  rg <<- range(abund_list$CCA$chem,
+                    abund_list$Coral$chem,
+                    abund_list$Limu$chem)
+           
+  abund_list <<- abund_list
+  print(nr)
+  print(rg)
+  print(nrow(base_heatmap[[2]]))
+  row_an <- rowAnnotation(boxplot = chem_box_plots,
+                          width = unit(4, "in"), 
+                          show_annotation_name = F)
+  col_an <- columnAnnotation(boxplot = micro_box_plots,
+                             height = unit(4, "in"),
+                             show_annotation_name = F)
+  
+  ht_list <- base_heatmap[[1]] + row_an
+  #ht_list <- ht_list %v% col_an
+          
+return(list(ht_list, base_heatmap[[2]]))
+}
+
+## Make The Figure
+
+# select interesting groups of microbes and metabolites
+cool_network <- "118"
+cool_order <- c("BD2-11_terrestrial_group_or","Chitinophagales")
+cool_class <- "Glycerophospholipids"
+
+
+# subset by microbe orders that show algae/coral difference and metabolite class 
+glyc_mat <- sub_cor_mat(cor_mat = z_cat_mat,
+                        chem_col = "class",
+                        micro_col = "order",
+                        chem_val = cool_class,
+                        micro_val = cool_order)
+
+# get abundance matrices
+glyc_list <- abund_by_group(
+                            cor_mat = ht_glyc[[2]],
+                            m_abund = micro_abund,
+                            c_abund = chem_abund,
+                            meta = sample_dat,
+                            group = "sample_type",
+                            sample_col = "sample_barcode",
+                            id_col = "featureID")
+
+# generate heatmap
+ht_glyc <- generate_phymap(correlation_mat = glyc_mat)
+
+# add barplots
+ht_glyc_box <- add_boxplots(base_heatmap = ht_glyc,
+                          glyc_list)
+
+save_heatmap(ht_glyc_box, "gly-pho-lip_bicluster")
 
 # Identifying Noteworthy Metabolites ------------------------------------------
 
