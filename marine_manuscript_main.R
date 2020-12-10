@@ -45,6 +45,12 @@ source("src/read_unifrac.R")
 # function for formatting microbial data for mmvec
 source("src/format_mmvec.R")
 
+
+# set color scheme for sample types
+sample_type_cols <- c(CCA = "#6469ed",
+                      Coral = "#e49c4c",
+                      Limu = "#7cc854" )
+
 #setwd("/home/sean/Documents/Bioinformatics/Projects/SuperTransect/Analysis/marine_manuscript")
 # 1. Load and clean microbial data ----------------------------
 # Load and clean data from the metaflowimcs pipeline.
@@ -99,7 +105,7 @@ final_marine_phy <- subset_samples(final_marine_phy,
                                    sample_type %in% c("Limu","CCA","Coral"))
 
 # Re-classify genera based on our target genera for Limu and Coral
-keep_genera <- c("Jania", "Halimeda","Dichotoma", "Porites", "Monitipora", "Pocillopora")
+keep_genera <- c("Jania", "Halimeda","Galaxaura", "Porites", "Monitipora", "Pocillopora")
 
 genus_data <- sample_data(final_marine_phy)$genus
 
@@ -167,7 +173,7 @@ chem_raw <- fread(chem_raw_file)
 chem_meta <- fread(chem_sample_file)
 
 # clean up sample genus info
-keep_genera <- c("Jania", "Halimeda","Dichotoma", "Porites", "Monitipora", "Pocillopora")
+keep_genera <- c("Jania", "Halimeda","Galaxaura", "Porites", "Monitipora", "Pocillopora")
 
 chem_meta[ , genus := ifelse(genus %in% keep_genera, genus, "Other" )]
 
@@ -222,12 +228,6 @@ chem_phy <- make_chem_phyloseq(chem_abund = chem_abund,
 # convert to relative abundance
 chem_phy <- transform_sample_counts(chem_phy,
                                     function(x) x / sum(x))
-
-
-# set color scheme for sample types
-sample_type_cols <- c(CCA = "#6469ed",
-                      Coral = "#e49c4c",
-                      Limu = "#7cc854" )
 
 # write out as flat tables
 physeq_csv_out(chem_phy,
@@ -420,8 +420,6 @@ chem_phy <- readRDS("data/processed/chem_phy.rds")
 
 
 # 6. All microbe NMDS and permanova ---------------------------------------------------------
-
-
 
 # clean up genera names
 sample_data(micro_phy)$genus <- ifelse(sample_data(micro_phy)$genus %in% keep_genera,
@@ -969,6 +967,7 @@ HS_abund <- abund_clean[ , HS_feats]
 HS_abund$sample_type <- as.character(sam_dat$sample_type)
 HS_abund$site_name   <- as.character(sam_dat$site_name)
 
+# run linear models on each feature with sample type as independent variable
 run_lm <-function(feat_name, lm_abund){
        formula_call <- as.formula(paste0(feat_name, " ~ sample_type")) 
     
@@ -981,6 +980,9 @@ lm.out <- lapply(
                 HS_feats,
                 run_lm,
                 lm_abund = HS_abund)
+
+# generaate boxplots
+box.out <- lapply()
 
 
 # summarize output of lm and anova for each of the selected metabolites
