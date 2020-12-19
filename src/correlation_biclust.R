@@ -13,59 +13,63 @@ library(circlize)
 source("src/biclust_helper_functions.R")
 
 # Read Qemistree Tables -------------------------------------------------
-# Qemistree output files include plotting information, all organized by unique 'id'
-# Read tables of data related to metabolite qemistree 
-class_tips   <- fread("data/raw/qemistree/labels.tsv", key = "id")
-color_tips   <- fread("data/raw/qemistree/colors.tsv",  key = "id")
-barplot_tips <- fread("data/raw/qemistree/barplots.tsv", key = "id")
+tip_data_file <- "data/raw/qemistree/Fingerprints to features.tsv"
+peak_data_file <- "data/processed/table_exports/all_marine_metabolite_tax_flat_table.csv"
+chem_abund_file <- "data/processed/table_exports/paired_marine_metabolite_abundance_flat_table.csv"
 
-# table that provides key to matching qemistree tip labels to other metabolomics data(mmvec etc.)
-tip_to_feature <- fread("data/raw/qemistree/Fingerprints to features.tsv", key = "id")
+asv_tax_file <- "data/processed/table_exports/paired_marine_microbe_tax_flat_table.csv"
+micro_abund_file <- "data/processed/table_exports/paired_marine_microbe_abundance_flat_table.csv"
 
-# additional feature information (networks, classifications, etc.)
-peak_data <- fread("data/processed/table_exports/all_marine_metabolite_tax_flat_table.csv")
+micro_tree_file <- "data/raw/FastTree_100.tre"
+chem_tree_file <- "data/raw/qemistree/qemistree.tree"
+
+sample_data_file <- "data/processed/table_exports/paired_marine_microbe_sample_flat_table.csv"
+
+mmvec_file <- "data/raw/mmvec/Ranks_result.tsv"
+
+# key to matching qemistree tip labels to other metabolomics data(mmvec etc.)
+tip_to_feature <- fread(tip_data_file, key = "id")
+
+# additional feature information (networks, classifications, etc.)metabolites
+peak_data <- fread(peak_data_file)
 setnames(peak_data,"V1", "featureID")
 peak_data[ , featureID:= gsub("id_","",featureID)]
 
-# Merge the qemistree outputs together with information we have on the individual metabolites
-tip_data <- merge(class_tips, color_tips)
-tip_data <- merge(tip_data, barplot_tips)
-tip_data <- merge(tip_to_feature, tip_data)
-tip_data <- merge(tip_data, peak_data, by = "featureID")
-
+# Merge the qemistree outputs with metabolite peak information
+tip_data <- merge(tip_to_feature, peak_data, by = "featureID")
+tip_data$componentindex <- sub(" +", "", tip_data$componentindex)
 qem_id_map <- setNames(tip_data$featureID, tip_data$id)
 
 # Read and Organize Metabolite Qemistree Tree ---------------------------------------------------
 # read in qemistree tree file 
-qemistree_raw <- read.tree(file = "data/raw/qemistree/qemistree.tree")
+qemistree_raw <- read.tree(file = chem_tree_file)
 
 # update tip labels to 'featureID' to match the rest of our metabolite data
 qemistree_raw$tip.label <- unname(qem_id_map[qemistree_raw$tip.label])
 qem_tip_data <- tip_data[featureID %in% qemistree_raw$tip.label]
-
 qemistree_raw <- drop.tip(qemistree_raw, tip_data[class == "unclassified", featureID])
 
 # Read and Organize Microbe FastTree Phylogenetic Tree --------------------------------------------
 # read in fastree file
-fastree_raw <- read.tree("data/raw/FastTree_100.tre")
+fastree_raw <- read.tree(micro_tree_file)
 
 # Read in ASV and Metabolite Abundance Data-----------------------
 # asv taxonomy data
-asv_table <- fread("data/processed/table_exports/paired_marine_microbe_tax_flat_table.csv",
+asv_table <- fread(asv_tax_file,
                    header = T)
 setnames(asv_table, "V1", "OTU_ID")
 
 # asv relative abundance
-micro_abund <- read.csv("data/processed/table_exports/paired_marine_microbe_abundance_flat_table.csv",
+micro_abund <- read.csv(micro_abund_file,
                         row.names = 1)
 micro_abund <- as.matrix(micro_abund)
 colnames(micro_abund) <- sub("X","",colnames(micro_abund))
 
 # sample data
-sample_dat <- read.csv("data/processed/table_exports/paired_marine_microbe_sample_flat_table.csv")
+sample_dat <- read.csv(sample_data_file)
 
 # metabolite relative abundance
-chem_abund <- read.csv("data/processed/table_exports/paired_marine_metabolite_abundance_flat_table.csv",
+chem_abund <- read.csv(chem_abund_file,
                        row.names = 1)
 chem_abund  <- as.matrix(chem_abund)
 colnames(chem_abund) <- sub("X","",colnames(chem_abund))
@@ -94,7 +98,8 @@ chem_sums <- get_sums(chem_abund,
 # Read MMVEC and correlation tables -------------------------------
 
 # MMVEC data (matrix showing pairwise mmvec scores)
-mmvec_table <- fread("data/raw/mmvec/Ranks_result.tsv", key = "featureid")
+mmvec_table <- fread(mmvec_file,
+                     key = "featureid")
 
 mmvec_table[ , featureid := sub("metabolite",
                                 "",
@@ -102,9 +107,6 @@ mmvec_table[ , featureid := sub("metabolite",
 setnames(mmvec_table,
          "featureid",
          "featureID")
-
-## Read Spearman correlations from 'parallel_cor.R'
-# all_cors <- readRDS("data/processed/all_cors_cutoff.rds")
 
 # Filter Matrix For Heatmap-----------------------------------------------
 ## Subset correlation matrices to match qemistree and filter out uninteresting metabolites
@@ -114,7 +116,6 @@ mmvec_mat <- as( mmvec_table[ , .SD, .SDcols = !"featureID"], "matrix")
 row.names(mmvec_mat) <- mmvec_table$featureID
 
 # Subset mmvec data to only include ids that are in qemistree and ASV metadata
-# Also remove metabolites with a median mmvec score of <2
 mmvec_mat <- mmvec_mat[row.names(mmvec_mat) %in% qemistree_raw$tip.label ,
                        colnames(mmvec_mat) %in% asv_table$OTU_ID]
 mmvec_mat <- mmvec_mat[apply(mmvec_mat, 1, median) >= 2 , ]
@@ -139,7 +140,6 @@ z_cat_mat <- type_match(mi_type = micro_top_type,
                         cor_mat = z_mmvec_mat,
                         cutoff = 1)
 
-
 # Generate Heatmaps ----------------------------------------------
 # see generate_phymap() in biclust_helper_functions.R for more information
 # a lot of information (e.g. trees, sample data, etc.) is passed to this function via default settings
@@ -158,21 +158,7 @@ cool_network <- "118" # remove as contaminant
 cool_order <- c("BD2-11_terrestrial_group_or","Chitinophagales")
 cool_class <- "Glycerophospholipids"
 
-# Figure 5B networks
-c(558,
-  306,
-  152,
-  101,
-  45,
-  243,
-  218,
-  68) # ,acyl carnitine
-
-# Just CCA networks
-c(47, 359, 141, 48, 50, 222, 211)
-
-# plot glycerophospholipds and   prenol lipids
-
+# Plot glycerophospholipds and prenol lipids
 
 # subset by microbe orders that show algae/coral difference and metabolite class 
 glyc_mat <- sub_cor_mat(cor_mat = z_cat_mat,
@@ -190,31 +176,51 @@ save_heatmap(ht_glyc, "gly-pho-lip_bicluster")
 
 # loop through other interesting chemical classes
 
-classes <- c("Fatty Acyls",
-"Carboxylic acids and derivatives",
-"Prenol lipids",
-"Steroids and steroid derivatives",
-"Benzene and substituted derivatives",
-"Organooxygen compounds"
+cool_classes <- c(
+  "Fatty Acyls",
+  "Carboxylic acids and derivatives",
+  "Prenol lipids",
+  "Steroids and steroid derivatives",
+  "Benzene and substituted derivatives",
+  "Organooxygen compounds"
 )
 
-for(cl in classes){
+# make it easy to plot a bunch of heatmaps for subsets of the metabolite data
+ht_wrapper <-function(cl, chem_col){
   cl_mat <- sub_cor_mat(cor_mat = z_cat_mat,
-                        chem_col = "class",
-                        micro_col = "order",
+                        chem_col = chem_col,
+                        micro_col = NULL,
                         chem_val = cl,
                         micro_val = NULL)
   # generate heatmap
-  ht_cl <- generate_phymap(correlation_mat = cl_mat,
-                             box_plot = T)
-  
+  ht_cl <- generate_phymap( correlation_mat = cl_mat, box_plot = T, )
   save_heatmap(ht_cl, paste0(cl, "_bicluster"))
-  
 }
 
+lapply(cool_classes, ht_wrapper, chem_col = "class")
+
+## cool networks 
+# Based on Craig's stats, not necessarily specific to sample type
+# all have library matches
+cool_networks <- c(114, 5, 18, 40, 52, 69, 74, 107, 135, 144, 146, 147, 191, 201, 241, 242, 289, 380, 610, 617, 734, 801)
+
+# Single sample type networks
+cca_networks <- c(106, 127, 416, 501, 529, 54, 88 )
+coral <- c(103)
+
+# Pull out networks that are actually in the correlation matrix
+z_mmvec_nets <- tip_data[tip_data$featureID %in% row.names(z_mmvec_mat),
+                         .N, by =  componentindex][order(N, decreasing = T)]
+
+nets_we_have <- z_mmvec_nets[N > 3 & componentindex != "-1", componentindex]
+
+# which cool networks are in the mmvec selected networks?
 
 
-i# Identifying Noteworthy Metabolites ------------------------------------------
+lapply(nets_we_have[nets_we_have %in% cool_networks],
+       ht_wrapper, chem_col = "componentindex")
+
+# Identifying Noteworthy Metabolites ------------------------------------------
 
 ## merge all of our data for microbe metabolite relationships together
 # 1) coerce all data to long format and standardize column names

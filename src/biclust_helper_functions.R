@@ -1,4 +1,4 @@
-# functions that help lot the correlation bicluster
+# functions that help with the correlation bicluster
 library(data.table)
 library(ComplexHeatmap)
 
@@ -175,6 +175,10 @@ generate_phymap <- function(
     # use abund_list() to generate boxplot data that matches heatmap matrix
     box_abunds <- abund_by_group(cor_mat = correlation_mat)
     
+    # relative annotation width an names for plot
+    ann_width = c(1,1,5,20)
+    ann_names = c(T,T,F,F)
+    
     # identify separate wrapper functions of box_plots() for metabolites and microbes
     # these will be called in columnAnnotation/rowAnnotation
     chem_boxplot <- function(index){
@@ -193,13 +197,17 @@ generate_phymap <- function(
     # if box_plot == F, don't generate box plots as row/column annotations, instead set to NULL
       micro_boxplot = NULL
       chem_boxplot = NULL
+      
+      # relative annotation width in plot
+      ann_width = c(1,1,20)
+      ann_names = c(T,T,F)
     }
   
   # metabolite row annotation
   ha_row <- rowAnnotation(
     Class = top_levels(chem_meta$class),
     Network = top_levels(chem_meta$componentindex,
-                         exclude = "  -1", # drop single networks
+                         exclude = "-1", # drop single networks
                          N = 30),
     # stacked barplots
     Sample_Type = anno_barplot(
@@ -212,8 +220,9 @@ generate_phymap <- function(
     ),
     # boxplot
     boxplot = chem_boxplot,
-    annotation_width = c(1,1,5,20),
-    width = unit(3, "in")
+    annotation_width = ann_width,
+    width = unit(3, "in"),
+    show_annotation_name = ann_names
   )
   
   # microbe column annotation
@@ -232,8 +241,9 @@ generate_phymap <- function(
     ),
     Order = top_levels(micro_meta$order, N = n_col),
     Class = top_levels(micro_meta$class, N = n_col),
-    annotation_height = c(20,5,1,1),
-    height = unit(3, "in")
+    annotation_height = rev(ann_width),
+    height = unit(3, "in"),
+    show_annotation_name = rev(ann_names)
   )
   
   # generate heatmap
@@ -260,6 +270,7 @@ generate_phymap <- function(
     # annotations
     top_annotation =  ha_col,
     right_annotation = ha_row
+  
   )
   
   print(paste0("Total tips in Qemistree:","  ",length(labels(chem_dendro))))

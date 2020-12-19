@@ -10,9 +10,9 @@ library(eulerr)
 library(vegan)
 library(pairwiseAdonis)
 library(tidyr)
+library(biomformat)
 
 #library(speedyseq)
-
 
 ## identify data files
 
@@ -228,6 +228,7 @@ chem_phy <- make_chem_phyloseq(chem_abund = chem_abund,
 # convert to relative abundance
 chem_phy <- transform_sample_counts(chem_phy,
                                     function(x) x / sum(x))
+
 
 # write out as flat tables
 physeq_csv_out(chem_phy,
@@ -584,6 +585,7 @@ if (all( sample_names(pair_micro_phy) %in% sample_names(pair_chem_phy) ) ){
 )
 
 # write out paired tables
+# microbes
 physeq_csv_out(pair_micro_phy, 
                description = "paired_marine_microbe",
                outdir = "data/processed/table_exports")
@@ -591,12 +593,20 @@ physeq_csv_out(pair_micro_phy,
 write.csv(as.matrix(pair_micro_dist), 
           "data/processed/table_exports/paired_marine_microbe_unifrac_dist.csv")
 
+saveRDS(pair_micro_phy, "data/processed/table_exports/paired_chem_phyloseq.rds")
+write_biom(make_biom(data = otu_table(pair_micro_phy)), "data/processed/paired_microbe.biom")
+
+# metabolites
 physeq_csv_out(pair_chem_phy,
                description = "paired_marine_metabolite",
                outdir = "data/processed/table_exports")
 
 write.csv(as.matrix(pair_chem_dist),
           "data/processed/table_exports/paired_marine_metabolite_bray_dist.csv")
+
+saveRDS(pair_chem_phy, "data/processed/table_exports/paired_chem_phyloseq.rds")
+write_biom(make_biom(data = otu_table(pair_chem_phy)), "data/processed/paired_metabolite.biom")
+
 
 # 9. NMDS and Mantel of microbes and metabolites ----------------------------------------------
 
@@ -896,16 +906,16 @@ write.csv(network_fold_changes,
 # 14. Variable Selection Using Random Forest ----------------------------
 # Identify metabolite features that are highly correlated with sample types
 
-# This code was run on the UH-HPC to speed things up
+# This section of code was run on the UH-HPC to speed things up
 
 library(VSURF)
 
 # set seed for parallel
-set.seed(2020, "L'Ecuyer-CMRG")
-
-# read in metabolite abundance (relative abundance of peak areas) and sample data (information on samples)
-# abundance of metabolites will be used to predict sample type (Limu, Coral, CCA)
-
+# set.seed(2020, "L'Ecuyer-CMRG")
+# 
+# # read in metabolite abundance (relative abundance of peak areas) and sample data (information on samples)
+# # abundance of metabolites will be used to predict sample type (Limu, Coral, CCA)
+# 
 metabolite_abundance_file <- "data/processed/table_exports/all_marine_metabolite_abundance_flat_table.csv"
 sample_data_file <- "data/processed/table_exports/all_marine_metabolite_sample_flat_table.csv"
 metabolite_metadata_file <- "data/processed/table_exports//all_marine_metabolite_tax_flat_table.csv"
@@ -922,7 +932,7 @@ chem_dat <- read.csv(metabolite_metadata_file,
                      row.names = 1)
 chem_dat$featureID <- row.names(chem_dat)
 
-# clean and arrange abundance data for VSURF random forest 
+# clean and arrange abundance data for VSURF random forest
 abund<- as.data.frame(t(abund_raw))
 row.names(sam_dat) <- paste0("X",row.names(sam_dat))
 abund_clean <- abund[ row.names(sam_dat), ]
@@ -943,6 +953,8 @@ all(row.names(abund) == row.names(sam_dat))
 # Read in vsurf results (Variable Importance scores)
 sample_type_vsurf <-readRDS("data/processed/sample_type_vsurf.rds")
 
+sample_type_RF <- readRDS("data/processed/sample_type_rf.rds")
+
 # pull out scores for each metabolite
 all_metabolite_scores <-
   data.table(featureID = colnames(abund[, sample_type_vsurf$imp.mean.dec.ind]),
@@ -953,16 +965,20 @@ all_metabolite_scores <-  merge(all_metabolite_scores,
 
 # identify scores higher than 1 Standard Deviation from mean
 high_metabolite_scores <- 
-              all_metabolite_scores[ RF_score > sd(RF_score), ]
+              all_metabolite_scores[ RF_score > 2*sd(RF_score), ]
 
 HS_feats <- high_metabolite_scores$featureID
 
 # write out
+write.csv(sample_type_RF$importance, "data/processed/all_metabolite_RF_importance.csv")
+write.csv(sample_type_RF$localImportance, "data/processed/all_metabolite_RF_local_importance.csv")
 fwrite(all_metabolite_scores, "data/processed/all_metabolite_vsurf_scores.csv")
 fwrite(high_metabolite_scores, "data/processed/high_metabolite_vsurf_scores.csv")
 
 # get abundance data and names for high scoring metabolites
 HS_abund <- abund_clean[ , HS_feats]
+# transform to normal-ish distribution
+HS_abund <- as.data.frame(apply(MARGIN = 2, X= HS_abund, FUN =  function(x) asin(sqrt(x))))
 
 HS_abund$sample_type <- as.character(sam_dat$sample_type)
 HS_abund$site_name   <- as.character(sam_dat$site_name)
@@ -980,10 +996,6 @@ lm.out <- lapply(
                 HS_feats,
                 run_lm,
                 lm_abund = HS_abund)
-
-# generaate boxplots
-box.out <- lapply()
-
 
 # summarize output of lm and anova for each of the selected metabolites
 

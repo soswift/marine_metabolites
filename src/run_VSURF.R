@@ -1,6 +1,6 @@
 # Run Random Forest on Metabolites Data to Find Good Predictors of Sample Type
 library(VSURF)
-
+library(randomForest)
 # set seed for parallel
 set.seed(2020, "L'Ecuyer-CMRG")
 
@@ -18,18 +18,30 @@ sam_dat <- read.csv(sample_data_file,
                     row.names = 1)
 
 # clean and arrange abundance data for VSURF random forest 
-abund<- as.data.frame(t(abund_raw))
+abund <- as.data.frame(t(abund_raw))
 
 row.names(sam_dat) <- paste0("X",row.names(sam_dat))
 
 abund_clean <- abund[ row.names(sam_dat), ]
 
-all(row.names(abund) == row.names(sam_dat))
+all(row.names(abund_clean) == row.names(sam_dat))
 
 # run VSURF to identify variables for "interpretation"
 # see: https://journal.r-project.org/archive/2015/RJ-2015-018/RJ-2015-018.pdf
 
 vsurf.out <- VSURF(x = abund, y = sam_dat$sample_type,
-                   ncores = 4, parallel = T, clusterType = "FORK")
-
+                   ncores = 4, parallel = T, clusterType = "FORK", localImp = T)
 saveRDS(vsurf.out, "out/sample_type_vsurf.rds")
+
+
+# run randomForest to get local importance variables (a.k.a. casewise importance)
+rf_dat <- abund_clean
+rf_dat <- sam_dat$sample_type
+
+print("running RF")
+tm <- proc.time()
+rf.out <- randomForest(sample_type ~ .,data = rf_dat, ntree = 500, localImp = T, do.trace = 5)
+proc.time() - tm
+saveRDS(rf.out, "out/sample_type_rf.rds")
+
+
