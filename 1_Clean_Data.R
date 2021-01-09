@@ -1,0 +1,490 @@
+# This R script will generate the figures and analyses associated with the Waimea Valley marine microbial communities
+# Began 08/29/2020
+# Setup environment ----------------------------------------
+
+# Load libraries
+
+library(phyloseq)
+library(data.table)
+library(tidyr)
+library(biomformat)
+
+# source lots of helper functions for plotting and subsetting
+source("src/helper_functions.R")
+
+# source function for reading and cleaning abundance table
+source("src/clean_and_query_16S.R")
+
+# source helper function for making phyloseq objects
+source("src/make_phyloseq.R")
+
+# source funciton for writing out phyloseq objects
+source("src/physeq_csv_out.R")
+
+# function for reading unifrac dists from flat tables
+source("src/read_unifrac.R")
+
+# function for formatting microbial data for mmvec
+source("src/format_mmvec.R")
+
+
+# set color scheme for sample types
+sample_type_cols <- c(CCA = "#6469ed",
+                      Coral = "#e49c4c",
+                      Limu = "#7cc854" )
+
+## identify data files
+
+# microbial data files
+abundance_file   <- "data/raw/abundance_table_100.shared"
+
+sample_data_file <- "data/raw/new_marine_meta.csv"
+
+taxonomy_file    <- "data/raw/annotations_100.taxonomy"
+
+unifrac_file     <- "data/raw/unifrac_unweighted_100.csv"
+
+tree_file        <- "data/raw/FastTree_100.tre"
+
+
+#setwd("/home/sean/Documents/Bioinformatics/Projects/SuperTransect/Analysis/marine_manuscript")
+# 1. Load and clean microbial data ----------------------------
+# Load and clean data from the metaflowimcs pipeline.
+# Expects standards pipeline output format.
+# Data is subset to only include desired marine samples.
+# Read counts are subsampled to even depth and relative abundance transformed.
+
+# read in data and sample data, 
+
+marine_data <- clean_16S_tables(abundance_file = abundance_file,
+                                taxonomy_file = taxonomy_file,
+                                metadata_file = sample_data_file,
+                                description = "ST_marine",
+                                output_dir = "data/processed",
+                                id_column = "sequencing_id",
+                                cull = list(min.num = 3,
+                                            min.abund = 0.00001,
+                                            min.single.abund = 0.001))
+
+marine_phy <- make_phyloseq(abund_file = "data/processed/ST_marine_abundance_table.csv",
+                            meta_file  = "data/processed/ST_marine_metadata_table.csv",
+                            tax_file   = "data/processed/ST_marine_taxonomy_table.csv",
+                            id_column  = "sequencing_id")
+
+rm(marine_data)
+
+# check variation in sequencing depths and subsample to standard value
+nrow(otu_table(marine_phy))
+length(sample_names(marine_phy))
+hist(sample_sums(marine_phy), breaks = 30)
+
+marine_phy_rar <- rarefy_even_depth(marine_phy,
+                                    rngseed = 1,
+                                    sample.size = 15000,
+                                    replace = F)
+# check total OTUs
+nrow(otu_table(marine_phy_rar))
+
+# check which samples were dropped due to low read counts
+marine_data[["metadata"]][!(sequencing_id %in% sample_names(marine_phy_rar))]
+length(sample_names(marine_phy_rar))
+
+# convert the OTU counts to relative abundance
+final_marine_phy <- transform_sample_counts(marine_phy_rar,
+                                            function(x) x / sum(x))
+
+# drop sediment and water samples
+final_marine_phy <- subset_samples(final_marine_phy,
+                                   sample_type %in% c("Limu","CCA","Coral"))
+
+# Re-classify genera based on our target genera for Limu and Coral
+keep_genera <- c("Jania", "Halimeda","Galaxaura", "Porites", "Monitipora", "Pocillopora")
+
+genus_data <- sample_data(final_marine_phy)$genus
+
+sample_data(final_marine_phy)$genus <- ifelse(genus_data %in% keep_genera,
+                                              genus_data,
+                                              "Other" )
+
+final_marine_phy <- prune_taxa(x = final_marine_phy,
+                               taxa = taxa_sums(final_marine_phy) > 0)
+
+
+saveRDS(final_marine_phy, file = "data/processed/final_marine_phy.rds")
+
+rm(marine_phy_rar)
+
+# write marine microbial sample tables out as flat files
+physeq_csv_out(final_marine_phy,
+               description = "all_marine_microbe",
+               outdir = "data/processed/table_exports/")
+
+# finally, get unifrac distance object for the selected samples
+final_unifrac <- read_unifrac(unifrac_file = "data/raw/unifrac_weighted_100.csv", 
+                              phyloseq_obj = final_marine_phy)
+
+# write out unifrac subset to marine samples
+saveRDS(final_unifrac, "data/processed/final_unifrac.rds")
+write.csv(as.matrix(final_unifrac),
+          "data/processed/table_exports/all_marine_microbe_unifrac_dist.csv")
+
+# Final_unifrac contains all the relevant marine microbial samples.
+# Some of these samples may not have corresponding metabolomics data.
+# Incomparable samples will be dropped for joint analyses.
+
+
+# 2. export data for MMVEC -----------------------------------------
+
+# to match metabolomics data, we need to replace the id used for sequencing with sample names
+# from the metadata, pull out sample barcodes for each sequencing id, matching the order in the abundance table
+
+new_ids  <-  marine_data[["metadata"]][ match( colnames( get_taxa( final_marine_phy ) ), sequencing_id ),
+                                        sample_barcode]
+
+format_mmvec(phyloseq_obj = final_marine_phy,
+             id_column = "Group",
+             new_ids = new_ids,
+             output_dir = "data/processed",
+             description = "marine")
+
+# 3. Load and Cleaning metabolomics data ------------------------------------------------
+
+# Metabolomics data provided in one big table with peak identity and peak areas in the same file.
+# The sample data file matches the microbial sample data, but has additional information about metabolomics sample ids(?)
+
+
+# metabolomics data files
+chem_raw_file    <- "data/raw/Helena_CCA_Coral_Limu_FeatureTable.txt"
+
+chem_sample_file <- "data/raw/new_marine_meta.csv"
+
+
+# this table combines abundance and metabolite feature metadata
+chem_raw <- fread(chem_raw_file)
+
+# read in metabolomics sample data
+chem_meta <- fread(chem_sample_file)
+
+# clean up sample genus info
+keep_genera <- c("Jania", "Halimeda","Galaxaura", "Porites", "Monitipora", "Pocillopora")
+
+chem_meta[ , genus := ifelse(genus %in% keep_genera, genus, "Other" )]
+
+
+# format metabolite data using custom cleaning functions
+
+## drop bad samples
+bad_samples <- c(2638,
+                 2839,
+                 2684,
+                 2750,
+                 2815,
+                 2650,
+                 2795,
+                 2862,
+                 2905)
+
+# call function to pull out abundance
+
+chem_abund_w_blanks <- get_chem_abundance(chem_data = chem_raw,
+                                          bad_samples = bad_samples)
+# call function to get chem peak data (i.e. classifications)
+chem_taxa_w_blanks <- get_chem_peak_data(chem_data = chem_raw)
+
+# arrange metadata
+chem_meta_w_blanks <- chem_meta[match(colnames(chem_abund_w_blanks), chem_meta$sample_barcode)]
+row.names(chem_meta_w_blanks) <- chem_meta_w_blanks[ , sample_barcode]
+
+chem_phy_w_blanks <- make_chem_phyloseq(chem_abund = chem_abund_w_blanks,
+                                        chem_meta = chem_meta_w_blanks,
+                                        chem_tax = chem_taxa_w_blanks,
+                                        id_column = "sample_barcode")
+
+# drop blanks and remove chemical features no longer present
+not_blanks <- !grepl("blank",
+                     colnames(chem_abund_w_blanks))
+
+chem_abund <- chem_abund_w_blanks[ , not_blanks]
+chem_abund <- chem_abund[rowSums(chem_abund) > 0, ]
+write.csv(chem_abund, "data/processed/table_exports/all_marine_metabolite_raw_abundance.csv")
+
+# subset metadata to match cleaned abundance
+chem_meta <- chem_meta[match(colnames(chem_abund), chem_meta$sample_barcode)]
+
+
+# call function to make phyloseq of metabolite data
+chem_phy <- make_chem_phyloseq(chem_abund = chem_abund,
+                               chem_meta = chem_meta, 
+                               chem_tax = chem_taxa_w_blanks,
+                               id_column = "sample_barcode")
+
+# convert to relative abundance
+chem_phy <- transform_sample_counts(chem_phy,
+                                    function(x) x / sum(x))
+
+
+# write out as flat tables
+physeq_csv_out(chem_phy,
+               description = "all_marine_metabolite",
+               outdir = "data/processed/table_exports")
+
+physeq_csv_out(chem_phy_w_blanks,
+               description = "all_marine_metabolite_w_blanks",
+               outdir = "data/processed/table_exports/")
+
+saveRDS(chem_phy, "data/processed/chem_phy.rds")
+
+# clean up
+rm(chem_abund_w_blanks, 
+   chem_taxa_w_blanks,
+   chem_meta_w_blanks,
+   chem_abund,
+   chem_meta)
+# This R script will generate the figures and analyses associated with the Waimea Valley marine microbial communities
+# Began 08/29/2020
+# Setup environment ----------------------------------------
+
+# Load libraries
+
+library(phyloseq)
+library(data.table)
+library(eulerr)
+library(vegan)
+library(pairwiseAdonis)
+library(tidyr)
+library(biomformat)
+
+#library(speedyseq)
+
+## identify data files
+
+# microbial data files
+abundance_file   <- "data/raw/abundance_table_100.shared"
+
+sample_data_file <- "data/raw/new_marine_meta.csv"
+
+taxonomy_file    <- "data/raw/annotations_100.taxonomy"
+
+unifrac_file     <- "data/raw/unifrac_unweighted_100.csv"
+
+tree_file        <- "data/raw/FastTree_100.tre"
+
+# source lots of helper functions for plotting and subsetting
+source("src/helper_functions.R")
+
+# source function for reading and cleaning abundance table
+source("src/clean_and_query_16S.R")
+
+# source helper function for making phyloseq objects
+source("src/make_phyloseq.R")
+
+# source funciton for writing out phyloseq objects
+source("src/physeq_csv_out.R")
+
+# function for reading unifrac dists from flat tables
+source("src/read_unifrac.R")
+
+# function for formatting microbial data for mmvec
+source("src/format_mmvec.R")
+
+
+# set color scheme for sample types
+sample_type_cols <- c(CCA = "#6469ed",
+                      Coral = "#e49c4c",
+                      Limu = "#7cc854" )
+
+#setwd("/home/sean/Documents/Bioinformatics/Projects/SuperTransect/Analysis/marine_manuscript")
+# 1. Load and clean microbial data ----------------------------
+# Load and clean data from the metaflowimcs pipeline.
+# Expects standards pipeline output format.
+# Data is subset to only include desired marine samples.
+# Read counts are subsampled to even depth and relative abundance transformed.
+
+# read in data and sample data, 
+
+marine_data <- clean_16S_tables(abundance_file = abundance_file,
+                                taxonomy_file = taxonomy_file,
+                                metadata_file = sample_data_file,
+                                description = "ST_marine",
+                                output_dir = "data/processed",
+                                id_column = "sequencing_id",
+                                cull = list(min.num = 3,
+                                            min.abund = 0.00001,
+                                            min.single.abund = 0.001))
+
+marine_phy <- make_phyloseq(abund_file = "data/processed/ST_marine_abundance_table.csv",
+                            meta_file  = "data/processed/ST_marine_metadata_table.csv",
+                            tax_file   = "data/processed/ST_marine_taxonomy_table.csv",
+                            id_column  = "sequencing_id")
+
+rm(marine_data)
+
+# check variation in sequencing depths and subsample to standard value
+nrow(otu_table(marine_phy))
+length(sample_names(marine_phy))
+hist(sample_sums(marine_phy), breaks = 30)
+
+marine_phy_rar <- rarefy_even_depth(marine_phy,
+                                    rngseed = 1,
+                                    sample.size = 15000,
+                                    replace = F)
+# check total OTUs
+nrow(otu_table(marine_phy_rar))
+
+# check which samples were dropped due to low read counts
+marine_data[["metadata"]][!(sequencing_id %in% sample_names(marine_phy_rar))]
+length(sample_names(marine_phy_rar))
+
+# convert the OTU counts to relative abundance
+final_marine_phy <- transform_sample_counts(marine_phy_rar,
+                                            function(x) x / sum(x))
+
+# drop sediment and water samples
+final_marine_phy <- subset_samples(final_marine_phy,
+                                   sample_type %in% c("Limu","CCA","Coral"))
+
+# Re-classify genera based on our target genera for Limu and Coral
+keep_genera <- c("Jania", "Halimeda","Galaxaura", "Porites", "Monitipora", "Pocillopora")
+
+genus_data <- sample_data(final_marine_phy)$genus
+
+sample_data(final_marine_phy)$genus <- ifelse(genus_data %in% keep_genera,
+                                              genus_data,
+                                              "Other" )
+
+final_marine_phy <- prune_taxa(x = final_marine_phy,
+                               taxa = taxa_sums(final_marine_phy) > 0)
+
+
+saveRDS(final_marine_phy, file = "data/processed/final_marine_phy.rds")
+
+rm(marine_phy_rar)
+
+# write marine microbial sample tables out as flat files
+physeq_csv_out(final_marine_phy,
+               description = "all_marine_microbe",
+               outdir = "data/processed/table_exports/")
+
+# finally, get unifrac distance object for the selected samples
+final_unifrac <- read_unifrac(unifrac_file = "data/raw/unifrac_weighted_100.csv", 
+                              phyloseq_obj = final_marine_phy)
+
+# write out unifrac subset to marine samples
+saveRDS(final_unifrac, "data/processed/final_unifrac.rds")
+write.csv(as.matrix(final_unifrac),
+          "data/processed/table_exports/all_marine_microbe_unifrac_dist.csv")
+
+# Final_unifrac contains all the relevant marine microbial samples.
+# Some of these samples may not have corresponding metabolomics data.
+# Incomparable samples will be dropped for joint analyses.
+
+
+# 2. export data for MMVEC -----------------------------------------
+
+# to match metabolomics data, we need to replace the id used for sequencing with sample names
+# from the metadata, pull out sample barcodes for each sequencing id, matching the order in the abundance table
+
+new_ids  <-  marine_data[["metadata"]][ match( colnames( get_taxa( final_marine_phy ) ), sequencing_id ),
+                                        sample_barcode]
+
+format_mmvec(phyloseq_obj = final_marine_phy,
+             id_column = "Group",
+             new_ids = new_ids,
+             output_dir = "data/processed",
+             description = "marine")
+
+# 3. Load and Cleaning metabolomics data ------------------------------------------------
+
+# Metabolomics data provided in one big table with peak identity and peak areas in the same file.
+# The sample data file matches the microbial sample data, but has additional information about metabolomics sample ids(?)
+
+
+# metabolomics data files
+chem_raw_file    <- "data/raw/Helena_CCA_Coral_Limu_FeatureTable.txt"
+
+chem_sample_file <- "data/raw/new_marine_meta.csv"
+
+
+# this table combines abundance and metabolite feature metadata
+chem_raw <- fread(chem_raw_file)
+
+# read in metabolomics sample data
+chem_meta <- fread(chem_sample_file)
+
+# clean up sample genus info
+keep_genera <- c("Jania", "Halimeda","Galaxaura", "Porites", "Monitipora", "Pocillopora")
+
+chem_meta[ , genus := ifelse(genus %in% keep_genera, genus, "Other" )]
+
+
+# format metabolite data using custom cleaning functions
+
+## drop bad samples
+bad_samples <- c(2638,
+                 2839,
+                 2684,
+                 2750,
+                 2815,
+                 2650,
+                 2795,
+                 2862,
+                 2905)
+
+# call function to pull out abundance
+
+chem_abund_w_blanks <- get_chem_abundance(chem_data = chem_raw,
+                                          bad_samples = bad_samples)
+# call function to get chem peak data (i.e. classifications)
+chem_taxa_w_blanks <- get_chem_peak_data(chem_data = chem_raw)
+
+# arrange metadata
+chem_meta_w_blanks <- chem_meta[match(colnames(chem_abund_w_blanks), chem_meta$sample_barcode)]
+row.names(chem_meta_w_blanks) <- chem_meta_w_blanks[ , sample_barcode]
+
+chem_phy_w_blanks <- make_chem_phyloseq(chem_abund = chem_abund_w_blanks,
+                                        chem_meta = chem_meta_w_blanks,
+                                        chem_tax = chem_taxa_w_blanks,
+                                        id_column = "sample_barcode")
+
+# drop blanks and remove chemical features no longer present
+not_blanks <- !grepl("blank",
+                     colnames(chem_abund_w_blanks))
+
+chem_abund <- chem_abund_w_blanks[ , not_blanks]
+chem_abund <- chem_abund[rowSums(chem_abund) > 0, ]
+write.csv(chem_abund, "data/processed/table_exports/all_marine_metabolite_raw_abundance.csv")
+
+# subset metadata to match cleaned abundance
+chem_meta <- chem_meta[match(colnames(chem_abund), chem_meta$sample_barcode)]
+
+
+# call function to make phyloseq of metabolite data
+chem_phy <- make_chem_phyloseq(chem_abund = chem_abund,
+                               chem_meta = chem_meta, 
+                               chem_tax = chem_taxa_w_blanks,
+                               id_column = "sample_barcode")
+
+# convert to relative abundance
+chem_phy <- transform_sample_counts(chem_phy,
+                                    function(x) x / sum(x))
+
+
+# write out as flat tables
+physeq_csv_out(chem_phy,
+               description = "all_marine_metabolite",
+               outdir = "data/processed/table_exports")
+
+physeq_csv_out(chem_phy_w_blanks,
+               description = "all_marine_metabolite_w_blanks",
+               outdir = "data/processed/table_exports/")
+
+saveRDS(chem_phy, "data/processed/chem_phy.rds")
+
+# clean up
+rm(chem_abund_w_blanks, 
+   chem_taxa_w_blanks,
+   chem_meta_w_blanks,
+   chem_abund,
+   chem_meta)
+
+

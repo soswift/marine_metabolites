@@ -1,0 +1,11 @@
+# Set up conda env for SCNIC on hpc acount
+srun -I30 -p sandbox --mem=6G -c 2 -t 60 --pty /bin/bash
+module load lang/Anaconda3
+conda create -n SCNIC python=3 scnic
+
+# run scnic
+srun -I30 -p sandbox  --mem=6G -c 2 -t 60 --pty /bin/bash
+module load lang/Anaconda3
+source activate scnic
+
+SCNIC_analysis.py modules -i correls_marine.txt -o modules_output/ --min_r .2 --table all_marine_metabolite_raw_abundance_transpose.biom
