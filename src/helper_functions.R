@@ -111,11 +111,10 @@ do_permanova <- function(phyloseq_obj, var_name, dist_obj, description){
   a_meta <- as(sample_data(phyloseq_obj), "data.frame")
   
   a_formula<- as.formula(paste0("dist_obj ~ ", var_name ))
-  aov_results <- adonis2(a_formula, data = a_meta)
-  
-  aov_tab <-aov_results$aov.tab
-  aov_tab$description <- description
-  return(aov_tab)
+  aov_results <- as.data.frame(adonis2(a_formula, data = a_meta))
+
+  aov_results$description <- description
+  return(aov_results)
 }
 
 

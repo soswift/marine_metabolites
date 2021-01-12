@@ -194,7 +194,7 @@ abund_raw <- read.csv(metabolite_abundance_file,
 sam_dat   <- read.csv(sample_data_file,
                     header = T,
                     row.names = 1)
-
+sam_dat$sample_barcode <- paste0("X", sam_dat$sample_barcode)
 chem_dat  <- read.csv(metabolite_metadata_file,
                      header = T,
                      row.names = 1)
@@ -206,13 +206,19 @@ row.names(sam_dat) <- paste0("X",row.names(sam_dat))
 abund_clean <- abund[ row.names(sam_dat), ]
 all(row.names(abund) == row.names(sam_dat))
 
-# run VSURF on computing cluster
-# see: https://journal.r-project.org/archive/2015/RJ-2015-018/RJ-2015-018.pdf
+# classify each metabolite to a sample type based on summed relative abundance
 
-# vsurf.out <- VSURF(x = abund, y = sam_dat$sample_type,
-#                    ncores = 8, parallel = T, clusterType = "FORK")
+met_sums <- get_sums(t(abund_clean),
+                        group_col = "sample_type",
+                        id_col = "sample_barcode",
+                        meta = sam_dat,
+                        new_name = "featureID")
+met_sample_class<- get_top_type(met_sums)
 
-#saveRDS(vsurf.out, "out/sample_type_vsurf.rds")
+chem_dat$sample_class <- met_sample_class[chem_dat$featureID]
+
+# file 'run_VSURF.R' run on computing cluster
+# runs VSURF and random.Forest on cleaned metabolite data from above
 
 
 # 15. LM on Random Forest Filtered Metabolits --------------------------------
@@ -222,6 +228,8 @@ all(row.names(abund) == row.names(sam_dat))
 sample_type_vsurf <-readRDS("data/processed/sample_type_vsurf.rds")
 
 sample_type_RF <- readRDS("data/processed/sample_type_rf.rds")
+
+
 
 # pull out scores for each metabolite
 all_metabolite_scores <-
@@ -261,6 +269,8 @@ run_lm <-function(feat_name, lm_abund){
         return(lm_out)
 }
 
+# TODO add lines to calculate per sample type mean abundance
+
 lm.HS <- lapply(
                 HS_feats,
                 run_lm,
@@ -289,8 +299,6 @@ summarize_lm <- function(i, lm.out){
   summary_out <-
   data.frame(
     featureID = i,
-    VSURF_score = all_metabolite_scores[featureID %in% i, VSURF_score],
-    MDA = all_metabolite_scores[featureID %in% i, MeanDecreaseAccuracy],
     p_val  = lm_sum[[1]][["Pr(>F)"]][[1]],
     sum_sq = lm_sum[[1]]["Sum Sq"][[1,1]],
     f_val  = lm_sum[[1]]["F value"][1,1],
@@ -310,12 +318,21 @@ summarize_lm <- function(i, lm.out){
 HS_results <- lapply(HS_feats, summarize_lm, lm.out = lm.HS)
 HS_results <- do.call("rbind", HS_results)
 
+HS_results <- merge(HS_results,
+                   all_metabolite_scores,
+                   all.x = T, by = "featureID")
+
+
 # get results for all features
-all_results    <- lapply(all_feats, summarize_lm, lm.out = lm.all)
+all_results <- lapply(all_feats, summarize_lm, lm.out = lm.all)
 all_results <- do.call("rbind", all_results)
 
+all_results <- merge(all_results,
+                    all_metabolite_scores,
+                    all.x = T, by = "featureID")
+
 # adjust p values when considering all features
-all_results$adj_p_val <- p.adjust(all_results_df$p_val, method = "BH")
+all_results$adj_p_val <- p.adjust(all_results$p_val, method = "BH")
 
 pdf(file = "output/randomforest/pvalue_vs_RF.pdf")
 plot(log10(all_results$adj_p_val), all_results$VSURF_score,
@@ -328,5 +345,59 @@ plot(log10(all_results$adj_p_val), all_results$MDA,
 dev.off()
 
 # write out results
-write.csv(HS_results, "data/processed/RF_filt_metabolites_sample_type_anovas.csv")
-write.csv(all_results, "data/processed/all_metabolites_sample_type_anovas.csv")
+write.csv(HS_results, "data/processed/RF_filt_metabolites_sample_type_anovas.csv", row.names = F)
+write.csv(all_results, "data/processed/all_metabolites_sample_type_anovas.csv", row.names = F)
+
+
+## Compare randomForest selected metabolites with MMVEC ordination --------------------------------------
+# RF identified metabolites that are important for classifying sample types
+# Do these metabolites also significantly separate out in the MMVEC ordination?
+source("src/biclust_helper_functions.R")
+# read in
+# RF importance scores and linear model summary informations
+HS_results  <- fread("data/processed/RF_filt_metabolites_sample_type_anovas.csv")
+all_results <- fread("data/processed/all_metabolites_sample_type_anovas.csv")
+all_results
+
+# MMVEC ordination eigenvalues for microbes and metabolites
+mic_mmvec_ord <- fread("data/raw/mmvec/microbe_ordination.tsv") 
+met_mmvec_ord <- fread("data/raw/mmvec/metabolite_ordination.tsv") 
+
+# clean up microbe and feature names
+met_mmvec_ord[ ,featureID:= sub("metabolite", "id_", featureID) ]
+
+# check that features selected by RF are in the ordination
+all(HS_results$featureID %in% met_mmvec_ord$featureID)
+
+# merge ordination scores with RF/linear model information
+met_rf_ord <- merge(met_mmvec_ord, HS_results, by = "featureID", all.x = T)
+met_lm_ord <- merge(met_mmvec_ord, all_results, by = "featureID", all.x = T)
+
+# add columns that distinguish alpha and color
+met_rf_ord$RF_selection <- ifelse(is.na(met_rf_ord$p_val), "Not selected", "Selected by RF")
+met_rf_ord$transp <- ifelse(is.na(met_rf_ord$p_val), 0.2, 0.8)
+
+met_lm_ord$LM_selection <- ifelse(met_lm_ord$adj_p_val < 0.05 & !is.na(met_lm_ord$adj_p_val), "Not significant", "Significant")
+met_lm_ord$transp <- ifelse(met_lm_ord$LM_selection == "Not significant", 0.2 , 0.8)
+
+# plot the ordination with high RF scored metabolites
+p<- ggplot(data = met_rf_ord,
+           aes(x = X, y = Y, shape = RF_selection, col = sample_class))+
+          geom_point(alpha = met_rf_ord$transp) +
+          scale_shape_manual(values = c(1,19))+
+          theme_minimal()
+    
+p
+ggsave("output/randomforest/RF_variables_mmvec_biplot.pdf", 
+       plot = p, width = 9, height = 8)
+
+# plot the ordination with low FDR pvals
+p2 <- ggplot(data = met_lm_ord,
+           aes(x = X, y = Y, shape = LM_selection, col = sample_class))+
+          geom_point(alpha = met_lm_ord$transp) +
+          scale_shape_manual(values = c(1,19))+
+          theme_minimal()
+    
+p2
+ggsave("output/randomforest/LM_variables_mmvec_biplot.pdf", 
+       plot = p2, width = 9, height = 8)

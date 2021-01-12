@@ -54,7 +54,11 @@ tree_file        <- "data/raw/FastTree_100.tre"
 # Data is subset to only include desired marine samples.
 # Read counts are subsampled to even depth and relative abundance transformed.
 
-# read in data and sample data, 
+# first, check raw ASV and sample count before cleaning
+nrow(fread(taxonomy_file))
+nrow(fread(abundance_file))
+
+# read in data and sample data 
 
 marine_data <- clean_16S_tables(abundance_file = abundance_file,
                                 taxonomy_file = taxonomy_file,

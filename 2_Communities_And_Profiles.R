@@ -181,15 +181,21 @@ for(i in sample_types){
   )
   
   # calcluate permanovas for site
-  chem_anovas[[i]]<- do_permanova(a_phy, 
+  chem_anovas[[paste0(i,"_site")]]<- do_permanova(a_phy, 
                                   var_name = "site_name",
                                   dist_obj = a_dist, 
-                                  description =  paste0(i, " metabolite samples"))
-  
+                                  description =  paste0(i, " site metabolite samples"))
+  if(i != "CCA"){
+   chem_anovas[[paste0(i,"_genus")]]<- do_permanova(a_phy, 
+                                  var_name = "genus",
+                                  dist_obj = a_dist, 
+                                  description =  paste0(i, " genus metabolite samples"))
+}
+
 }
 
 write.csv(bind_rows(chem_anovas),
-          "output/permanova/sample_type_metabolite_permanova_results_by_site.csv")
+          "output/permanova/sample_type_metabolite_permanova_by_site_and_genus.csv")
 
 
 g <-arrangeGrob(chem_type_p[[1]], chem_type_p[[3]], chem_type_p[[5]],
@@ -254,6 +260,29 @@ print(micro_betadisp)
 print(TukeyHSD(micro_betadisp))
 sink()
 
+# read in alpha diversity indices for the microbial communities
+# these are calculated as part of the metaflowmics bioninformatics pipeline
+
+micro_div <-read.table("data/raw/diversity/all_alphaDiversity_100.summary", header = T)
+
+micro_div <- rename(micro_div,   "sequencing_id" ="group" )
+
+micro_div <- merge(micro_div, as.data.frame(as.matrix(sample_data(micro_phy))), by = "sequencing_id")
+
+# model alpha diversity as a function of sample type (limu, coral, CCA) and site
+
+chao_lm <- lm(chao ~sample_type*site_name, data = micro_div)
+shan_lm <- lm(shannoneven ~ sample_type*site_name, data = micro_div)
+
+chao_anova <- anova(chao_lm)
+shan_anova <- anova(shan_lm)
+
+sink("output/alphadiversity/alpha_div_by_type_and_site.txt")
+print(chao_anova)
+print(shan_anova)
+sink()
+
+
 # 7. Microbe by sample type NMDS and permanovas ---------------------------
 
 # initialize list of plots for microbial samples types
@@ -270,22 +299,32 @@ for(i in sample_types){
   # get distances
   a_dist <- subset_dist(micro_dist, a_phy)
   # plot by site
-  micro_type_p[[paste0(i,"_site")]] <- plot_NMDS(a_phy, "microbe",
-                        color_var = "site_name",
-                        dist_method = "unifrac",
-                        dist_obj = a_dist)
-  
+  micro_type_p[[paste0(i,"_site")]] <- plot_NMDS(
+                                        a_phy, "microbe",
+                                        color_var = "site_name",
+                                        dist_method = "unifrac",
+                                        dist_obj = a_dist)
+                  
   # plot by genus
-  micro_type_p[[paste0(i, "_genus")]] <- plot_NMDS(a_phy, "microbe",
-                        color_var = "genus",
-                        dist_method = "unifrac",
-                        dist_obj = a_dist)
-              
+  micro_type_p[[paste0(i, "_genus")]] <- plot_NMDS(
+                                          a_phy, "microbe",
+                                          color_var = "genus",
+                                          dist_method = "unifrac",
+                                          dist_obj = a_dist)
+                                
   # calcluate permanovas for site
-  micro_anovas[[i]]<- do_permanova(a_phy, 
-                                   var_name = "site_name",
-                                   dist_obj = a_dist, 
-                                   description =  paste0(i, " microbe samples"))
+  micro_anovas[[paste0(i,"_site")]] <- do_permanova(
+                                        a_phy, 
+                                        var_name = "site_name",
+                                        dist_obj = a_dist, 
+                                        description =  paste0(i, " site microbe samples"))
+  if(i != "CCA"){
+  micro_anovas[[paste0(i,"_genus")]] <- do_permanova(
+                                        a_phy, 
+                                        var_name = "genus",
+                                        dist_obj = a_dist, 
+                                        description =  paste0(i, " genus microbe samples"))
+  }
   
 }
 
@@ -293,13 +332,11 @@ g <-arrangeGrob(micro_type_p[["Limu_site"]], micro_type_p[["Coral_site"]], micro
                 micro_type_p[["Limu_genus"]], micro_type_p[["Coral_genus"]], micro_type_p[["CCA_genus"]],
                 nrow = 2, ncol = 3)
 
-
 ggsave("output/NMDS/sample_type_microbes_NMDS.pdf",
        plot = g, width = 15, height = 5)
 
-
 write.csv(bind_rows(micro_anovas),
-          "output/permanova/sample_type_microbe_permanova_by_site.csv")
+          "output/permanova/sample_type_microbe_permanova_by_site_and_genus.csv")
 
 
 # 8. Pair up microbes and metabolites ------------------------------------------
