@@ -1,50 +1,62 @@
-## Ordinations for microbes and metabolites
-
-# TODO Update genus colors for sub-plots
-# TODO arrange sub-plots
-
-# load libraries
-## analysis
-library(phyloseq)
-library(speedyseq)
-library(vegan)
-## plotting
-library(gridExtra)
-library(ggplot2)
-library(viridisLite)
-library(pheatmap)
-## utility
-library(dplyr)
-library(data.table)
-library(usedist)
-library(dendsort)
-
-
 # set seed
-
 set.seed( 100 )
-
 # set ggplot themes
-
-
 theme_set(theme_minimal())
-
-
-
-genus_cols <- c()
-
-site_cols <- c()
+  # load libraries
+  ## analysis
+  library(phyloseq)
+  library(speedyseq)
+  library(vegan)
+  ## plotting
+  library(gridExtra)
+  library(ggplot2)
+  library(viridisLite)
+  library(pheatmap)
+  library(ggpubr)
+  
+  ## utility
+  library(dplyr)
+  library(data.table)
+  library(usedist)
+  library(dendsort)
 
 # define functions -------------------------------------------------------------------------
 
-# function get_chem_abundance() separates feature abundance from feature metadata
-get_chem_abundance <- function(chem_data = chem_raw, bad_samples = bad_samples){
+  # clr() does clr transformation on a data.frame or matrix of relative abundance values
+clr <- function(rel_a){
+    # add a tiny number to the zero values
+    minval <- min(rel_a[rel_a > 0])/2
+    rel_a <- rel_a + minval
+    
+    # apply log ratio transformationi
+    # apply log ratio transformation
+    clr_a <- t(apply(rel_a, 1, function(x) {
+    log(x) - mean(log(x))
+    }))
+
   
+  return(as.data.frame(clr_a))
+  
+}
+
+# fc() calculates fold change while handling zeroes
+fc <- function(x,y){
+  if(y==0 && x == 0){
+    return(0)
+  }else if(y == 0){
+    return(Inf)
+  }else{
+    return(log2(x/y))
+  }
+}
+
+# function get_chem_abundance() separates feature abundance from feature metadata
+# specifically for table provided by Helena
+get_chem_abundance <- function(chem_data = chem_raw, bad_samples = bad_samples){
 
   # pull out the abundances
   abund_cols <-
     colnames(chem_data)[grepl("Peak area", colnames(chem_data))]
-  
   chem_abund <- chem_data[, ..abund_cols]
   
   ## clean up abundance column names
@@ -128,13 +140,9 @@ plot_NMDS <- function(a_phy, desc,  color_var, shape_var=NULL, dist_obj, dist_me
   
   p <- plot_ordination(a_phy, a_ord,
                        color = color_var,
-                       shape = shape_var,
-                       title = paste0(i,"Metabolite NMDS, Bray Curtis")) +
+                       shape = shape_var) +
                        stat_ellipse( level = 0.5)+
-                       coord_fixed()+
-                       theme(legend.key.size = unit(0.5, "cm"))
-    
-        
+                       theme(aspect.ratio = 1, legend.key.size = unit(0.5, "cm"))
   
   ggsave(paste0("output/NMDS/",i,"_",desc,"_NMDS_",dist_method,"_by_", color_var, ".pdf"),
          plot = p,

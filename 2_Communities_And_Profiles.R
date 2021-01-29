@@ -186,6 +186,8 @@ for(i in sample_types){
                                   dist_obj = a_dist, 
                                   description =  paste0(i, " site metabolite samples"))
   if(i != "CCA"){
+   a_phy <- subset_samples(a_phy, genus != "Other")
+   a_dist <- subset_dist(a_dist, a_phy)
    chem_anovas[[paste0(i,"_genus")]]<- do_permanova(a_phy, 
                                   var_name = "genus",
                                   dist_obj = a_dist, 
@@ -198,7 +200,7 @@ write.csv(bind_rows(chem_anovas),
           "output/permanova/sample_type_metabolite_permanova_by_site_and_genus.csv")
 
 
-g <-arrangeGrob(chem_type_p[[1]], chem_type_p[[3]], chem_type_p[[5]],
+g <- ggarrange(chem_type_p[[1]], chem_type_p[[3]], chem_type_p[[5]],
                 chem_type_p[[2]], chem_type_p[[4]], chem_type_p[[6]],
                 nrow = 2, ncol = 3)
 
@@ -209,10 +211,6 @@ ggsave(paste0("output/NMDS/sample_type_metabolites_NMDS.pdf"),
        height = 5)
 
 # 6. All microbe NMDS and permanova ---------------------------------------------------------
-
-# clean up genera names
-sample_data(micro_phy)$genus <- ifelse(sample_data(micro_phy)$genus %in% keep_genera,
-                                       sample_data(micro_phy)$genus, "Other")
 
 # unifrac distances
 micro_dist <- final_unifrac
@@ -298,19 +296,20 @@ for(i in sample_types){
   
   # get distances
   a_dist <- subset_dist(micro_dist, a_phy)
+  set.seed(2020)
   # plot by site
   micro_type_p[[paste0(i,"_site")]] <- plot_NMDS(
                                         a_phy, "microbe",
                                         color_var = "site_name",
                                         dist_method = "unifrac",
-                                        dist_obj = a_dist)
-                  
+                                        dist_obj = a_dist) 
+  set.seed(2020)
   # plot by genus
   micro_type_p[[paste0(i, "_genus")]] <- plot_NMDS(
                                           a_phy, "microbe",
                                           color_var = "genus",
                                           dist_method = "unifrac",
-                                          dist_obj = a_dist)
+                                          dist_obj = a_dist) 
                                 
   # calcluate permanovas for site
   micro_anovas[[paste0(i,"_site")]] <- do_permanova(
@@ -319,6 +318,8 @@ for(i in sample_types){
                                         dist_obj = a_dist, 
                                         description =  paste0(i, " site microbe samples"))
   if(i != "CCA"){
+  a_phy <- subset_samples(a_phy, genus != "Other")
+  a_dist <- subset_dist(a_dist, a_phy)
   micro_anovas[[paste0(i,"_genus")]] <- do_permanova(
                                         a_phy, 
                                         var_name = "genus",
