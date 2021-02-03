@@ -8,9 +8,11 @@ library(biomformat)
 library(vegan)
 library(pairwiseAdonis)
 
-# source helper functions for plotting and subsetting
+# source lots of helper functions for plotting and subsetting
 source("src/helper_functions.R")
 
+# function for reading unifrac dists from flat tables
+source("src/read_unifrac.R")
 
 # set color scheme for sample types
 sample_type_cols <- c(CCA = "#6469ed",
@@ -26,9 +28,7 @@ chem_phy         <- readRDS("data/processed/chem_phy.rds")
 # 13. Statistics on Metabolite Networks by Sample Type -----------------------------------------------
 # For each metabolite network, run anova and look for fold changes in abundance between sample types
 # This information can be used to confirm that networks actually associate with a given sample type.
-# Results inform network ordinations, cytoscape outputs, etc. with simple linear statistics. 
-
-# pull out metabolite peak data
+# Results can be used to inform network ordinations, cytoscape outputs, etc. with statistics. 
 peak_data <- as.data.frame(
                       as(tax_table(chem_phy),
                          "matrix") )
@@ -47,11 +47,9 @@ net_phy <-phyloseq(sample_data(chem_phy),
                    otu_table(chem_phy),
                    net_tax_table)
 
-# sum relative areas within a network
 network_merge <- tax_glom(net_phy,
                             "componentindex")
 
-# remove networks with only a single component
 network_merge <- subset_taxa(network_merge,
                              componentindex != "  -1")
 
@@ -59,10 +57,9 @@ network_merge <- subset_taxa(network_merge,
 unique_networks <- unique(as(tax_table(network_merge),
                              "matrix")[,"componentindex"]) 
 
-# for each network, subset the data and run anova 
+# for each network, subset data and run anova 
 net_data <- list()
 for(a_network in unique_networks) {
-
   # subset compounds by network
   network_phy <- subset_taxa(network_merge,
                              componentindex == a_network)
@@ -143,5 +140,7 @@ network_fold_changes$adj_p_val <- p.adjust(network_fold_changes$p_val, method = 
 write.csv(network_fold_changes,
           "data/processed/network_anova_and_fold_changes.csv",
           row.names = F)
+
+
 
 

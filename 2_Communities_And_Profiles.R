@@ -1,5 +1,10 @@
+# Script for generating analyses that rely on entire microbial communities and metabolite profiles
+# Analyses include ordinations, permanovas, betadispersion tests, and paired ordination (Procrustes).
+# All of these analyses are based on distance matrices generated from relative abundance data.
+
 ## Load libraries --------------------------
 # General utility
+
 library(phyloseq)
 library(data.table)
 library(tidyr)
@@ -9,16 +14,10 @@ library(eulerr)
 library(vegan)
 library(pairwiseAdonis)
 
-# source lots of helper functions for plotting and subsetting
+# source helper functions for plotting and subsetting
 source("src/helper_functions.R")
 
-# source function for reading and cleaning abundance table
-source("src/clean_and_query_16S.R")
-
-# source helper function for making phyloseq objects
-source("src/make_phyloseq.R")
-
-# source funciton for writing out phyloseq objects
+# source function for writing out phyloseq objects
 source("src/physeq_csv_out.R")
 
 # function for reading unifrac dists from flat tables
@@ -27,12 +26,12 @@ source("src/read_unifrac.R")
 # function for formatting microbial data for mmvec
 source("src/format_mmvec.R")
 
-
 # set color scheme for sample types
-sample_type_cols <- c(CCA = "#6469ed",
+sample_type_cols <- c(CCA   = "#6469ed",
                       Coral = "#e49c4c",
-                      Limu = "#7cc854" )
-# Save Point: Load Cleaned Microbe and Metabolite Data----------------------------------------------------------------
+                      Limu  = "#7cc854" )
+
+# Load cleaned microbe and metabolite data----------------------------------------------------------------
 final_marine_phy <- readRDS("data/processed/final_marine_phy.rds")
 micro_phy <- final_marine_phy
 
@@ -42,11 +41,10 @@ chem_phy <- readRDS("data/processed/chem_phy.rds")
 
 
 # 4. All metabolite NMDS and calculate permanovas -----------------------------------------------------
-
-# initalize chem distances list
+# initalize a list of distance matrices
 chem_dist <- list()
 
-# initialize plots list
+# initialize a list of plots
 chem_p <- list()
 
 # NMDS for all samples, by type
@@ -57,8 +55,7 @@ chem_dist$bray <- vegdist(veganifyOTU(chem_phy),
 chem_dist$euclidean <- vegdist(veganifyOTU(chem_phy),
                                method = "euclidean")
 
-# run NMDS on all three distance objects
-
+# run NMDS on all three distance methods and compare plots
 for(a in seq_along(chem_dist) ){
   
   dist_name <- names(chem_dist[a])
@@ -85,8 +82,7 @@ ggsave(paste0("output/NMDS/all_metabolites_NMDS_dists.pdf"),
        width = 15,
        height = 5)
 
-# run NMDS on metabolites with blanks
-
+# run NMDS on metabolites with blanks included
 dist_blanks <- vegdist(veganifyOTU(chem_phy_w_blanks),
                        method = "bray")
 
@@ -105,9 +101,7 @@ blank_p <- plot_ordination(
 ggsave("output/NMDS/all_metabolites_NMDS_w_blanks.pdf",
        plot = blank_p)
 
-# chem permanovas 
-# do permanova for all samples, by type and site
-
+# run permanovas on metabolites, modeling by sample type, site, and the interaction
 chem_anova_all <-
   do_permanova(
     chem_phy,
@@ -119,14 +113,14 @@ write.csv(chem_anova_all,
           "output/permanova/all_metabolite_permanova_by_site_type.csv")
 
 
-# do pairwise permanova for all samples by type
+# run type 2 pairwise permanova for all samples just by sample type
 chem_anova_pairwise <- pairwise.adonis2(chem_dist$bray ~ sample_type,
                                         data = as(sample_data(chem_phy),
                                                   "data.frame"))
 write.csv(chem_anova_pairwise,
           "output/permanova/all_metabolite_pairwise_permanova_by_type.csv")
 
-# calculate beta dispersion by group and test significance
+# calculate beta dispersion by sample type 
 chem_sam_dat <- as(sample_data(chem_phy), "data.frame")
 
 chem_groups <- chem_sam_dat[match(labels(chem_dist$bray),
@@ -135,19 +129,22 @@ chem_groups <- chem_sam_dat[match(labels(chem_dist$bray),
 
 chem_betadisp <- betadisper(chem_dist$bray, chem_groups)
 
-# write out beta dispersion summary and tukey test resulst
+# write out sample type beta dispersion summary and tukeyHSD test for significance
 sink("output/permanova/all_metabolite_betadispersion.txt" )
 print(chem_betadisp)
 print(TukeyHSD(chem_betadisp))
 sink()
 
-# write out distance matrices
+# write out distance matrices 
 write.csv(as.matrix(chem_dist$bray),
           "data/processed/table_exports/all_marine_metabolite_bray_dist.csv")
 write.csv(as.matrix(dist_blanks),
           "data/processed/table_exports/all_marine_metabolite_w_blanks_bray_dist.csv")
 
 # 5. Metabolite by sample type NMDS and permanova --------------------------------------------
+# Subset metabolite samples to a single sample type (Limu, Coral, CCA) for within sample type statistical tests and plots.
+# Within samples of a given sample type, does the host genus or sampling site correlate with metabolite composition?
+
 sample_types <- unique(chem_phy@sam_data$sample_type)
 
 chem_type_p <- list()
@@ -196,6 +193,7 @@ for(i in sample_types){
 
 }
 
+# write out permanova results and arranged plots
 write.csv(bind_rows(chem_anovas),
           "output/permanova/sample_type_metabolite_permanova_by_site_and_genus.csv")
 
@@ -211,6 +209,9 @@ ggsave(paste0("output/NMDS/sample_type_metabolites_NMDS.pdf"),
        height = 5)
 
 # 6. All microbe NMDS and permanova ---------------------------------------------------------
+# Run all the same analyses (permanova, NMDS) on the microbial data.
+# Also test for differences in alpha diversity across sample types and sites.
+
 
 # unifrac distances
 micro_dist <- final_unifrac
@@ -230,8 +231,7 @@ plot_ordination(micro_phy,
 ggsave("output/NMDS/all_microbes_NMDS.pdf",width = 7, height = 5)
 
 
-# do permanova on all microbe sample type separation
-
+# run permanova on all microbes by sample type, site, and the interaction
 micro_anova_all <- do_permanova(micro_phy,
                                   var_name = "sample_type*site_name",
                                   micro_dist,
@@ -243,7 +243,7 @@ micro_anova_pairwise <- pairwise.adonis2(micro_dist ~ sample_type,
                                                    "data.frame"))
 write.csv(micro_anova_pairwise, "output/permanova/all_microbe_pairwise_permanova_by_type")
 
-# do betadispersion by group on all microbe samples
+# run betadispersion by sample type on all microbe samples
 micro_sam_dat <- as(sample_data(micro_phy), "data.frame")
 
 micro_groups <- micro_sam_dat[match(labels(micro_dist),
@@ -259,16 +259,14 @@ print(TukeyHSD(micro_betadisp))
 sink()
 
 # read in alpha diversity indices for the microbial communities
-# these are calculated as part of the metaflowmics bioninformatics pipeline
-
+# these were calculated as part of the metaflowmics bioninformatics pipeline
 micro_div <-read.table("data/raw/diversity/all_alphaDiversity_100.summary", header = T)
 
 micro_div <- rename(micro_div,   "sequencing_id" ="group" )
 
 micro_div <- merge(micro_div, as.data.frame(as.matrix(sample_data(micro_phy))), by = "sequencing_id")
 
-# model alpha diversity as a function of sample type (limu, coral, CCA) and site
-
+# model alpha diversity as a function of sample type (limu, coral, CCA), site, and the interaction
 chao_lm <- lm(chao ~sample_type*site_name, data = micro_div)
 shan_lm <- lm(shannoneven ~ sample_type*site_name, data = micro_div)
 
@@ -282,8 +280,10 @@ sink()
 
 
 # 7. Microbe by sample type NMDS and permanovas ---------------------------
+# Subset microbial samples to a single sample type (Limu, Coral, CCA) for within sample type statistical tests and plots.
+# Within samples of a given sample type, does the host genus or sampling site correlate with microbial composition?
 
-# initialize list of plots for microbial samples types
+# initialize list of plots and permanovas for microbial samples types
 micro_type_p <- list()
 
 micro_anovas <- list()
@@ -311,12 +311,14 @@ for(i in sample_types){
                                           dist_method = "unifrac",
                                           dist_obj = a_dist) 
                                 
-  # calcluate permanovas for site
+  # run permanovas for site
   micro_anovas[[paste0(i,"_site")]] <- do_permanova(
                                         a_phy, 
                                         var_name = "site_name",
                                         dist_obj = a_dist, 
                                         description =  paste0(i, " site microbe samples"))
+
+  # run permanovas for genus (but not for CCA, which lacks genera information)
   if(i != "CCA"){
   a_phy <- subset_samples(a_phy, genus != "Other")
   a_dist <- subset_dist(a_dist, a_phy)
@@ -329,6 +331,7 @@ for(i in sample_types){
   
 }
 
+# arrange plots and write out results
 g <-arrangeGrob(micro_type_p[["Limu_site"]], micro_type_p[["Coral_site"]], micro_type_p[["CCA_site"]],
                 micro_type_p[["Limu_genus"]], micro_type_p[["Coral_genus"]], micro_type_p[["CCA_genus"]],
                 nrow = 2, ncol = 3)
@@ -341,8 +344,10 @@ write.csv(bind_rows(micro_anovas),
 
 
 # 8. Pair up microbes and metabolites ------------------------------------------
+# Run paired analyses on microbes and metabolites, matched up by the physical samples from which data were collected
+# These analyses are run on a subset of the total samples where both metabolite and microbial data were available.
 
-# find mismatches
+# find mismatches between microbial and metabolite samples
 micro_sample_bcodes <- micro_phy@sam_data$sample_barcode
 print( paste("Total micro samples = ", length(micro_sample_bcodes)))
 
@@ -361,7 +366,7 @@ micro_no_chem <- micro_phy@sam_data[ ! (micro_phy@sam_data$sample_barcode %in% c
 
 print( paste("In micro data, but not in chem = ", nrow(micro_no_chem)))
 
-# subset both datasets
+# subset both datasets to the samples that overlap
 pair_chem_phy <- subset_samples(chem_phy,
                                 sample_barcode %in% micro_phy@sam_data$sample_barcode)
 
@@ -372,20 +377,20 @@ pair_micro_phy  <- subset_samples(micro_phy,
 nsamples(pair_chem_phy)
 nsamples(pair_micro_phy)
 
-# switch micro samples over to chem barcodes so everything is unified
+# switch microbial barcodes over to metabolite barcodes so that everything has a unified identifier
 ## pull out otu table and sample data
 otus    <- pair_micro_phy@otu_table
 samples <- pair_micro_phy@sam_data
 taxa    <- pair_micro_phy@tax_table
 
-## change sample ids to ms barcodes
+## change sample ids to metabolite barcodes
 samples$sequence_id <- row.names(samples)
 row.names(samples)  <- samples$sample_barcode
 colnames(otus)      <- samples$sample_barcode
 
 pair_micro_phy  <- phyloseq(samples, otus, taxa)
 
-# change unifrac names
+# update the microbial sample ids on the unifrac distance matrix
 pair_micro_dist <- as.matrix(micro_dist)[samples$sequence_id, samples$sequence_id]
 colnames(pair_micro_dist) <- samples$sample_barcode
 row.names(pair_micro_dist) <- samples$sample_barcode
@@ -394,17 +399,17 @@ pair_micro_dist <- as.dist(pair_micro_dist)
 
 rm(samples, otus, taxa)
 
-# generate paired chem dist
+# re-generate a bray curtis distance matrix for the paired metabolite samples
 pair_chem_dist <- vegdist(veganifyOTU(pair_chem_phy), method = "bray")
 
-## check that names match
+## check that the microbial and metabolite names match
 if (all( sample_names(pair_micro_phy) %in% sample_names(pair_chem_phy) ) ){
   message("chem and micro sample names match")
 } else (
   warning("chem and micro sample names are different")
 )
 
-# write out paired tables
+# write out paired flat tables
 # microbes
 physeq_csv_out(pair_micro_phy, 
                description = "paired_marine_microbe",
@@ -429,11 +434,13 @@ write_biom(make_biom(data = otu_table(pair_chem_phy)), "data/processed/paired_me
 
 
 # 9. NMDS and Mantel of microbes and metabolites ----------------------------------------------
+# Perform paired ordinations, procrustes rotations, and mantel tests.
+# Do metabolite profiles and microbial communities tell the same story?
 
 # Initialize plot list
 p <- list()
 
-# All samples
+# Ordinate all samples
 p$all <- paired_ordination(
   microbe_phy = pair_micro_phy,
   chem_phy = pair_chem_phy,
@@ -442,6 +449,7 @@ p$all <- paired_ordination(
   color = "sample_type"
 )
 
+# Separately ordinate samples from each sample type
 sample_types <- unique(pair_chem_phy@sam_data$sample_type)
 
 for(i in sample_types){
@@ -461,7 +469,7 @@ for(i in sample_types){
   )
 }
 
-
+# arrange plots and write out
 grid.arrange(p$all$micro      , p$all$chem,     p$all$proc,
              p$Limu$micro     , p$Limu$chem,    p$Limu$proc,
              p$Coral$micro    , p$Coral$chem,   p$Coral$proc,
@@ -478,13 +486,13 @@ g <-arrangeGrob(p$all$micro      , p$all$chem,     p$all$proc,
 
 ggsave("output/NMDS/combined_microbe_metabolite_procrust.png", g, width = 15, height = 20)
 
-
 # 10. Identify outlier CCA -----------------------------------------------------
+# Some CCA samples are obvious outliers based on ordinations
+# Identify these outliers for exclusion from subsequent ordinations.
 
 cca_p <- list()
 
 # Plot metabolite ordination with CCA labelled
-
 chem_ord  <- ordinate(chem_phy,
                       method = "NMDS",
                       distance = chem_dist[[2]])
@@ -501,8 +509,6 @@ cca_p[["chem"]] <- plot_ordination(
 
 
 # Plot microbe ordination with CCA labelled
-
-
 micro_ord  <- ordinate(micro_phy,
                        method = "NMDS",
                        distance = micro_dist)
@@ -522,7 +528,7 @@ g <-arrangeGrob(grobs = cca_p)
 
 ggsave("output/NMDS/CCA_outlier_comparison.pdf", plot = g)
 
-# plot paired ordination with CCA removed
+# plot paired ordination with all CCA removed
 
 no_cca_micro <- subset_samples(pair_micro_phy, sample_type != "CCA")
 no_cca_chem <- subset_samples(pair_chem_phy, sample_type != "CCA")
@@ -539,7 +545,9 @@ p <- paired_ordination(
 g <- arrangeGrob(p$micro, p$chem, p$proc, ncol = 3, nrow = 1)
 
 ggsave("output/NMDS/no_cca_procrustes.pdf", plot = g, width = 15)
+
 # 11. All microbe and metabolite heatmaps ------------------------------------------------------
+# Make large heatmaps of all microbes and metabolites by sample as an exploratory analysis.
 
 plot_heatmap(phyloseq_obj = micro_phy, description = "microbe")
 
@@ -547,12 +555,15 @@ plot_heatmap(phyloseq_obj = chem_phy, description = "metabolite",
              dist_method = "canberra")
 
 # 12. Metabolite and Microbe Eulerr diagrams -----------------------------------------------
-# For corals and algae, generate euler plots by Genus
+# For corals and algae, generate euler plots to show overlap in composition by sample type.
+# Within sample types, generate euler plots to show overlap by genus
 
 # merge all samples by sample type (coral, limu, cca)
 all_chem_eul  <- euler_subset(chem_phy, group_by = "sample_type")
 
 all_micro_eul <- euler_subset(micro_phy, group_by = "sample_type")
+
+# plot overlap by sample type
 
 pdf("output/Euler/Metabolite_Sample_Type_Euler.pdf")
 print(plot(all_chem_eul, fills = sample_type_cols, quantities = T))
@@ -564,8 +575,7 @@ dev.off()
 
 
 
-# make a list of euler plots by host genus
-# for each sample type (coral/limu) and data type (metabolite, microbe) 
+# for each sample type (coral/limu) and data type (metabolite, microbe), plot overlap by genus
 eul_plots <- list()
 
 # metabolite

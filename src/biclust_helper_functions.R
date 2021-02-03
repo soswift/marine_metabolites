@@ -3,7 +3,7 @@ library(data.table)
 library(ComplexHeatmap)
 
 # get_sums() aggregates a matrix and generates sums by a metadata category
-get_sums <- function(abundance, group_col, id_col, meta, new_name){
+get_means <- function(abundance, group_col, id_col, meta, new_name){
   abund_dt <- as.data.table(t(abundance), keep.rownames = T)
   abund_dt$group_vec <- meta[ match(abund_dt$rn, meta[[id_col]]), group_col ]
   abund_dt[, rn:=NULL]
@@ -14,7 +14,7 @@ get_sums <- function(abundance, group_col, id_col, meta, new_name){
   abund_dt[ , sum(abund), by = .(group_vec, ID)]
   abund_dt <- dcast(abund_dt, ID ~ group_vec,
                     value.var = "abund",
-                    fun.aggregate = sum)
+                    fun.aggregate = mean)
   setnames(abund_dt, "ID", new_name)
   return(abund_dt)
 }
@@ -36,10 +36,10 @@ scale_dat <- function(mat_dat){
 
 # get_top_type() returns the name of the highest sum for each row
 # assumes the first column is an ID name, subsequent columns are sums by type
-get_top_type <- function(type_sums){
-  type_names <- colnames(type_sums[ , -1])
-  top_types <-apply( type_sums[ , -1], 1, function(x) type_names[which.max(x)])
-  names(top_types) <- type_sums[[1]]
+get_top_type <- function(type_means){
+  type_names <- colnames(type_means[ , -1])
+  top_types <-apply( type_means[ , -1], 1, function(x) type_names[which.max(x)])
+  names(top_types) <- type_means[[1]]
   return(top_types)
 }
 
