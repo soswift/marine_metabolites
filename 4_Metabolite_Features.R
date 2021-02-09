@@ -95,6 +95,7 @@ norm_abund <-matrix(compositions::clr(abund_clean),
 
 write.csv(norm_abund, "data/processed/CLR_transformed_metabolite_abundance.csv")
 
+# norm abund is a matrix with samples as rows and features as columns
 norm_abund <- as.data.frame(norm_abund)
 norm_abund$sample_type <- as.character(sam_dat$sample_type)
 norm_abund$site_name   <- as.character(sam_dat$site_name)
@@ -278,18 +279,19 @@ p
 ggsave("output/randomforest/RF_variables_mmvec_biplot.pdf", 
        plot = p, width = 9, height = 8)
 
-# plot the ordination with low FDR pvals
+# plot the ordination with LM significant metabolites filled and colored by sample type
 p2 <- ggplot(data = met_lm_ord,
              aes(x = X, y = Y, shape = LM_selection, col = sample_type_DA))+
   geom_point(alpha = met_lm_ord$transp) +
   scale_shape_manual(values = c(1,19))+
   theme_minimal()
 
+
 p2
 ggsave("output/randomforest/LM_variables_mmvec_biplot.pdf", 
        plot = p2, width = 9, height = 8)
 
-
+# plot the ordination with only LM significant metabolites shown
 p3 <- ggplot(data = met_lm_ord[met_lm_ord$LM_selection ==  "Significant",],
   aes(x = X, y = Y, shape = LM_selection, col = sample_type_DA))+
   geom_point() +

@@ -14,12 +14,8 @@ theme_set(theme_bw())
 
 # Load Data -------------------------------------------------------------------------------------------------------------------------------------------------------
 # read phyloseq object
-full_dat <- readRDS("data/processed/final_marine_phy.rds")
-
-# pull out sample metadata
-meta <-as(full_dat@sam_data, "data.frame")
-meta <- as(meta, "data.table")
-
+meta_file <- "data/processed/table_exports/all_marine_metabolite_sample_flat_table.csv"
+meta<- fread(meta_file)
 meta <- meta[ , c("lat","long"):= list(as.numeric(lat), as.numeric(long))]
 
 # extract sites
@@ -102,6 +98,7 @@ crs(elev_ras_full)
 
 
 ## Bathymetry Rasters -------------------------------------------------------------------------------------------------------------------------------------------------------
+# Bathymetry data from 
 ## Bathymetry
 bath_ras_50 <- raster("data/raw/spatial/mhi_mbsyn_bathyonly_50m_v21.nc")
 bath_ras_50 <- crop(bath_ras_50, bbox_extent)
@@ -126,7 +123,8 @@ bath_topo_mat <- raster::as.matrix(bath_topo_ras)
 # Mask Bathymetry
 bath_ras <- mask(bath_ras_50, elev_ras_full)
 
-# convert to data.table and matrix
+# convert raster to data.table
+# set a name for the 3rd dimension of the raster (i.e. depth)
 bath_dt <- as(raster::as.data.frame(bath_ras, xy=T), "data.table")
 setnames(bath_dt, 3, "depth")
 bath_dt[ , alpha := ifelse(is.na(depth), 0, 1)]
@@ -249,7 +247,7 @@ p1 <- ggplot() +
               mapping = aes(x = x, y = y, fill = elev),
               alpha = elev_dt$alpha,
               interpolate = T) +
-  scale_fill_gradient( low = "khaki1", high = "red") +
+  scale_fill_gradient( low = "khaki", high = "darkgreen") +
   
   # new scale for bathymetry
   new_scale_fill()+
@@ -262,16 +260,19 @@ p1 <- ggplot() +
 
   # river line
   geom_sf(data = waimea_river,
-          color = alpha("blue",0.8),
-          size = 4) +
+          color = alpha("blue",0.8)) +
   
   # points
+  geom_point(aes(x = long, y = lat), 
+             data = point_data,
+             color = "white",
+             shape = 16,
+             size = 3) +
   geom_point(aes(x = long, y = lat, color = site_name), 
              data = point_data,
-             shape = 21,
-             fill = "white",
-             size = 1.5,
-             stroke = 2) +
+             shape = 17,
+             size = 1.5) +
+
   scale_color_manual(values = viridis(n = 5)) +
 
   # annotations
@@ -290,9 +291,9 @@ p1 <- ggplot() +
   theme_minimal() +
   theme(panel.background = element_rect(fill = "white"),
         axis.title.y = element_blank(),
-        axis.text.y  = element_blank(),
-        axis.ticks.y = element_blank()) +
-  margin()+
+        #axis.text.y  = element_blank(),
+        axis.ticks.y = element_blank(),
+        plot.margin = margin(0,0,0,0)) +
   labs(fill = "Depth (m)", color = "Site")
 
 p1
@@ -303,13 +304,6 @@ oahu_limits <- c(-158.305366, 21.212964, -157.624682, 21.766562)
 p2 <-ggplot()+
   # coastline
   geom_sf(data = hi_coast) +
-  # points
-  geom_point(aes(x = long, y = lat, color = site_name), 
-             data = point_data,
-             shape = 21,
-             fill = "white",
-             size = 1.5,
-             stroke = 2) +
   scale_color_manual(values = c("orange","red","blue","yellow","black")) +
   # rectangle
   geom_rect(aes(xmin = plot_lims$x[1]- 0.003,
@@ -343,12 +337,15 @@ p3 <-  ggplot() +
           color = alpha("blue",0.8)) +
   
   # points
+  geom_point(aes(x = long, y = lat), 
+             data = point_data,
+             color = "white",
+             shape = 16,
+             size = 3) +
   geom_point(aes(x = long, y = lat, color = site_name), 
              data = point_data,
-             shape = 21,
-             fill = "white",
-             size = 1.5,
-             stroke = 2) +
+             shape = 17,
+             size = 1.5)+
   scale_color_manual(values = viridis(n = 5)) +
   
   # annotations
@@ -371,8 +368,7 @@ p3 <-  ggplot() +
 
 plot_grid(p3,p1.5, labels = c("A","B"), label_size = 12, axis = "tblr",align = "v" )
 
-ggsave("output/map/ST_marine_map.png", 
-       dpi = 300,
+ggsave("output/map/ST_marine_map.pdf", 
        width = 15,
        height = 15,
        units = "in")

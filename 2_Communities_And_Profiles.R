@@ -13,6 +13,7 @@ library(biomformat)
 library(eulerr)
 library(vegan)
 library(pairwiseAdonis)
+library(cowplot)
 
 # source helper functions for plotting and subsetting
 source("src/helper_functions.R")
@@ -30,6 +31,22 @@ source("src/format_mmvec.R")
 sample_type_cols <- c(CCA   = "#6469ed",
                       Coral = "#e49c4c",
                       Limu  = "#7cc854" )
+
+site_cols <- c(SharksCove       = "#440154FF",
+               ThreeTablesBeach = "#3B528BFF",
+               TwinRocks        = "#21908CFF", 
+               UppersBeach      = "#5DC863FF",
+               WaimeaBay        = "#FDE725FF")
+
+genera_cols <- c(# Limu
+                 Jania =  ,
+                 Halimeda = ,
+                 Galaxaura = ,
+                 Other = ,
+                 # Coral
+                 Pocillopora = ,
+                 Porites = ,
+                 Monitipora = ,)
 
 # Load cleaned microbe and metabolite data----------------------------------------------------------------
 final_marine_phy <- readRDS("data/processed/final_marine_phy.rds")
@@ -75,7 +92,7 @@ for(a in seq_along(chem_dist) ){
 }
 
 g <-arrangeGrob(chem_p[[1]], chem_p[[2]], chem_p[[3]],
-                nrow = 1, ncol = 3)
+                nrow = 1, ncol = 3)i
 
 ggsave(paste0("output/NMDS/all_metabolites_NMDS_dists.pdf"),
        plot = g,
@@ -159,23 +176,20 @@ for(i in sample_types){
   a_dist <- subset_dist(chem_dist[[1]], a_phy)
   
   # plot by site
-  chem_type_p[[paste0(i,"_site")]] <- plot_NMDS(
-    a_phy,
-    "chem",
-    color_var = "site_name",
-    dist_method = "bray",
-    dist_obj = a_dist
-  )
+  a_ord  <- ordinate(a_phy,
+                     method = "NMDS",
+                     distance = a_dist)
   
+  chem_type_p[[paste0(i,"_site")]] <- plot_ordination(a_phy, a_ord, color = "site_name") +
+                                                     stat_ellipse( level = 0.5) +
+                                                     theme(aspect.ratio = 1, legend.key.size = unit(0.5, "cm")) +
+                                                     # standard site colors
+                                                     scale_color_manual(values = site_cols) 
   
   # plot by genus
-  chem_type_p[[paste0(i,"_genus")]] <- plot_NMDS(
-    a_phy,
-    "chem",
-    color_var = "genus",
-    dist_method = "bray",
-    dist_obj = a_dist
-  )
+  chem_type_p[[paste0(i,"_genus")]] <- plot_ordination(a_phy, a_ord, color = "genus") +
+                                                    stat_ellipse( level = 0.5) +
+                                                    theme(aspect.ratio = 1, legend.key.size = unit(0.5, "cm"))
   
   # calcluate permanovas for site
   chem_anovas[[paste0(i,"_site")]]<- do_permanova(a_phy, 
@@ -190,16 +204,23 @@ for(i in sample_types){
                                   dist_obj = a_dist, 
                                   description =  paste0(i, " genus metabolite samples"))
 }
-
 }
 
 # write out permanova results and arranged plots
 write.csv(bind_rows(chem_anovas),
           "output/permanova/sample_type_metabolite_permanova_by_site_and_genus.csv")
 
+# convert plot to grob
+chem_type_g <-lapply(chem_type_p, ggplotGrob)
 
-g <- ggarrange(chem_type_p[[1]], chem_type_p[[3]], chem_type_p[[5]],
-                chem_type_p[[2]], chem_type_p[[4]], chem_type_p[[6]],
+# set a standard width for all grobs
+std_width <- chem_type_g[[1]]$widths
+chem_type_std <- lapply(chem_type_g, function(x) {
+                  x$widths <- std_width
+                  return(x)})
+# arrange ordinations
+g <- ggarrange(chem_type_std[[1]], chem_type_std[[3]], chem_type_std[[5]],
+                chem_type_std[[2]], chem_type_std[[4]], chem_type_std[[6]],
                 nrow = 2, ncol = 3)
 
 
@@ -298,19 +319,21 @@ for(i in sample_types){
   a_dist <- subset_dist(micro_dist, a_phy)
   set.seed(2020)
   # plot by site
-  micro_type_p[[paste0(i,"_site")]] <- plot_NMDS(
-                                        a_phy, "microbe",
-                                        color_var = "site_name",
-                                        dist_method = "unifrac",
-                                        dist_obj = a_dist) 
-  set.seed(2020)
+  a_ord  <- ordinate(a_phy,
+                     method = "NMDS",
+                     distance = a_dist)
+  
+  micro_type_p[[paste0(i,"_site")]] <- plot_ordination(a_phy, a_ord, color = "site_name") +
+                                                      stat_ellipse( level = 0.5) +
+                                                      theme(aspect.ratio = 1, legend.key.size = unit(0.5, "cm")) +
+                                                      # standard site colors
+                                                      scale_color_manual(values = site_cols) 
+                                                    
   # plot by genus
-  micro_type_p[[paste0(i, "_genus")]] <- plot_NMDS(
-                                          a_phy, "microbe",
-                                          color_var = "genus",
-                                          dist_method = "unifrac",
-                                          dist_obj = a_dist) 
-                                
+  micro_type_p[[paste0(i,"_genus")]] <- plot_ordination(a_phy, a_ord, color = "genus") +
+                                                      stat_ellipse( level = 0.5) +
+                                                      theme(aspect.ratio = 1, legend.key.size = unit(0.5, "cm"))
+                                                                                  
   # run permanovas for site
   micro_anovas[[paste0(i,"_site")]] <- do_permanova(
                                         a_phy, 
@@ -331,9 +354,18 @@ for(i in sample_types){
   
 }
 
+# convert plot to grob
+micro_type_g <-lapply(micro_type_p, ggplotGrob)
+
+# set a standard width for all grobs
+std_width <- micro_type_g[[1]]$widths
+micro_type_std <- lapply(micro_type_g, function(x) {
+  x$widths <- std_width
+  return(x)})
+
 # arrange plots and write out results
-g <-arrangeGrob(micro_type_p[["Limu_site"]], micro_type_p[["Coral_site"]], micro_type_p[["CCA_site"]],
-                micro_type_p[["Limu_genus"]], micro_type_p[["Coral_genus"]], micro_type_p[["CCA_genus"]],
+g <-arrangeGrob(micro_type_std[["Limu_site"]], micro_type_std[["Coral_site"]], micro_type_std[["CCA_site"]],
+                micro_type_std[["Limu_genus"]], micro_type_std[["Coral_genus"]], micro_type_std[["CCA_genus"]],
                 nrow = 2, ncol = 3)
 
 ggsave("output/NMDS/sample_type_microbes_NMDS.pdf",
@@ -498,14 +530,15 @@ chem_ord  <- ordinate(chem_phy,
                       distance = chem_dist[[2]])
 
 cca_p[["chem"]] <- plot_ordination(
-  chem_phy,
-  chem_ord,
-  color = "sample_type",
-  shape = "site_name",
-  title = paste0("All Metabolite NMDS, ", "bray")
-) + 
-  scale_color_manual(values = sample_type_cols) + 
-  geom_text(aes(label = ifelse(sample_type == "CCA",sample_barcode,"")))
+                                  chem_phy,
+                                  chem_ord,
+                                  color = "sample_type",
+                                  shape = "site_name",
+                                  title = paste0("All Metabolite NMDS, ", "bray")
+                                ) + 
+                                  # standard sample type colors
+                                  scale_color_manual(values = sample_type_cols) + 
+                                  geom_text(aes(label = ifelse(sample_type == "CCA",sample_barcode,"")))
 
 
 # Plot microbe ordination with CCA labelled

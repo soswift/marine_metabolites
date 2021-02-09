@@ -179,6 +179,10 @@ ht_glyc <- generate_phymap(correlation_mat = glyc_mat,
   
 save_heatmap(ht_glyc, "gly-pho-lip_bicluster")
 
+pdf(file = "glycerophospholipid_chitinophagales_ht.pdf",
+    width = 20, height = 15)
+print(ht_glyc[[1]])
+dev.off()
 
 # There are some other groups of metabolites we're interested
 # loop through other interesting chemical classes

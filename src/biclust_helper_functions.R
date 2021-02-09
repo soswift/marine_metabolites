@@ -2,7 +2,7 @@
 library(data.table)
 library(ComplexHeatmap)
 
-# get_sums() aggregates a matrix and generates sums by a metadata category
+# get_means() aggregates a matrix and generates sums by a metadata category
 get_means <- function(abundance, group_col, id_col, meta, new_name){
   abund_dt <- as.data.table(t(abundance), keep.rownames = T)
   abund_dt$group_vec <- meta[ match(abund_dt$rn, meta[[id_col]]), group_col ]
@@ -89,8 +89,8 @@ generate_phymap <- function(
   # number of annotation values to display
   n_col = 20,
   # barchart sums
-  micro_b = micro_sums,
-  chem_b = chem_sums,
+  micro_b = micro_means,
+  chem_b = chem_means,
   # add boxplots
   box_plot = F
 ){
@@ -221,7 +221,7 @@ generate_phymap <- function(
     # boxplot
     boxplot = chem_boxplot,
     annotation_width = ann_width,
-    width = unit(3, "in"),
+    width = unit(5, "in"),
     show_annotation_name = ann_names
   )
   
@@ -242,7 +242,7 @@ generate_phymap <- function(
     Order = top_levels(micro_meta$order, N = n_col),
     Class = top_levels(micro_meta$class, N = n_col),
     annotation_height = rev(ann_width),
-    height = unit(3, "in"),
+    height = unit(5, "in"),
     show_annotation_name = rev(ann_names)
   )
   
@@ -266,11 +266,10 @@ generate_phymap <- function(
     # colors
     na_col = "white",
     col = col_fun,
-    rect_gp = gpar(col = "white"),
+    rect_gp = gpar(col = NA),
     # annotations
     top_annotation =  ha_col,
     right_annotation = ha_row
-  
   )
   
   print(paste0("Total tips in Qemistree:","  ",length(labels(chem_dendro))))

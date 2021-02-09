@@ -1,7 +1,6 @@
 # set seed
 set.seed( 100 )
 # set ggplot themes
-theme_set(theme_minimal())
   # load libraries
   ## analysis
   library(phyloseq)
@@ -14,6 +13,7 @@ theme_set(theme_minimal())
   library(pheatmap)
   library(ggpubr)
   
+theme_set(theme_minimal())
   ## utility
   library(dplyr)
   library(data.table)
@@ -21,23 +21,6 @@ theme_set(theme_minimal())
   library(dendsort)
 
 # define functions -------------------------------------------------------------------------
-
-  # clr() does clr transformation on a data.frame or matrix of relative abundance values
-clr <- function(rel_a){
-    # add a tiny number to the zero values
-    minval <- min(rel_a[rel_a > 0])/2
-    rel_a <- rel_a + minval
-    
-    # apply log ratio transformationi
-    # apply log ratio transformation
-    clr_a <- t(apply(rel_a, 1, function(x) {
-    log(x) - mean(log(x))
-    }))
-
-  
-  return(as.data.frame(clr_a))
-  
-}
 
 # fc() calculates fold change while handling zeroes
 fc <- function(x,y){
