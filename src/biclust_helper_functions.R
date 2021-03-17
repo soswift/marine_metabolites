@@ -431,24 +431,29 @@ box_plots = function(index, type, abund_list = abund_list, box_direction = "hori
 # Graph of microbe abundance vs. metabolite abundance should look pretty
 # graph_pair() takes a row from the paired data table and makes an x/y plot
 graph_pair <-
-  function(pairs_dat = top_pairs,
+  function(pairs_dat,
            chem_dat = chem_abund,
            micro_dat = micro_abund) {
     
     OTU = pairs_dat$OTU_ID[1]
-    Feature = pairs_dat$featureID[1]
+    Feature = sub("id_","",pairs_dat$featureID[1])
+
     
     x = chem_dat[row.names(chem_dat) == Feature ,]
     y = micro_dat[row.names(micro_dat) == OTU ,]
     
     print(plot(
-      x = x,
-      y = y,
+      x = log(x + 1e-6),
+      y = log(y + 1e-6),
       main = paste(OTU, "vs.", "Metabolite Feature", Feature),
-      sub = paste("Taxonomic Family:", pairs_dat$family,
-                  "Chemical Class:", pairs_dat$class.x, "Spearman:",
-                  cor(x,y, method = "spearman")),
+      sub = paste("Tax:", pairs_dat$order,
+                  "Chem:", pairs_dat$Qemistree_class,
+                  "Spearman:", round(cor(x,y, method = "spearman"), 2),
+                  "DA:",pairs_dat$sample_type_DA),
       xlab = "Log Metabolite RA",
       ylab = "Log OTU RA"
     ))
   }
+
+
+

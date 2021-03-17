@@ -4,7 +4,6 @@
 
 ## Load libraries --------------------------
 # General utility
-
 library(phyloseq)
 library(data.table)
 library(tidyr)
@@ -24,8 +23,6 @@ source("src/physeq_csv_out.R")
 # function for reading unifrac dists from flat tables
 source("src/read_unifrac.R")
 
-# function for formatting microbial data for mmvec
-source("src/format_mmvec.R")
 
 # set color scheme for sample types
 sample_type_cols <- c(CCA   = "#6469ed",
@@ -38,15 +35,15 @@ site_cols <- c(SharksCove       = "#440154FF",
                UppersBeach      = "#5DC863FF",
                WaimeaBay        = "#FDE725FF")
 
-genera_cols <- c(# Limu
-                 Jania =  ,
-                 Halimeda = ,
-                 Galaxaura = ,
-                 Other = ,
+genus_cols <- c(# Limu
+                 Jania =  "darkseagreen",
+                 Halimeda = "green2",
+                 Galaxaura = "darkgreen",
+                 Other = "grey58",
                  # Coral
-                 Pocillopora = ,
-                 Porites = ,
-                 Monitipora = ,)
+                 Pocillopora = "orange2",
+                 Porites = "gold",
+                 Monitipora = "khaki3")
 
 # Load cleaned microbe and metabolite data----------------------------------------------------------------
 final_marine_phy <- readRDS("data/processed/final_marine_phy.rds")
@@ -56,6 +53,7 @@ final_unifrac <- readRDS("data/processed/final_unifrac.rds")
 
 chem_phy <- readRDS("data/processed/chem_phy.rds")
 
+chem_phy_w_blanks <- readRDS("data/processed/chem_phy_w_blanks.rds")
 
 # 4. All metabolite NMDS and calculate permanovas -----------------------------------------------------
 # initalize a list of distance matrices
@@ -86,13 +84,21 @@ for(a in seq_along(chem_dist) ){
     chem_ord,
     color = "sample_type",
     shape = "site_name",
-    title = paste0("All Metabolite NMDS, ", dist_name)
-  ) + scale_color_manual(values = sample_type_cols)
+    title = paste0("All Metabolite NMDS, ", dist_name)) +
+    scale_color_manual(values = sample_type_cols)+
+    labs(subtitle = paste("stress =" ,signif(chem_ord$stress, 2)))+
+    stat_ellipse(aes(color = sample_type, shape = NULL),level = 0.5)
   
 }
 
+# plot bray curtis distance for main figure
+ggsave("output/NMDS/all_metabolites_NMDS.pdf",
+       plot = chem_p[[2]],
+       width = 10,
+       height = 7)
+
 g <-arrangeGrob(chem_p[[1]], chem_p[[2]], chem_p[[3]],
-                nrow = 1, ncol = 3)i
+                nrow = 1, ncol = 3)
 
 ggsave(paste0("output/NMDS/all_metabolites_NMDS_dists.pdf"),
        plot = g,
@@ -107,14 +113,13 @@ chem_ord_w_blanks  <- ordinate(chem_phy_w_blanks,
                       method = "NMDS",
                       distance = dist_blanks)
 
-blank_p <- plot_ordination(
-  chem_phy_w_blanks,
-  chem_ord_w_blanks,
-  color = "sample_type",
-  shape = "site_name",
-  title = "All Metabolite NMDS, canberra"
-) + scale_color_manual(values = c("darkgray",sample_type_cols))
-
+blank_p <- plot_ordination(chem_phy_w_blanks,
+                          chem_ord_w_blanks,
+                          color = "sample_type",
+                          shape = "site_name",
+                          title = "All Metabolite NMDS, canberra") +
+                          scale_color_manual(values = c("darkgray",sample_type_cols))
+                      
 ggsave("output/NMDS/all_metabolites_NMDS_w_blanks.pdf",
        plot = blank_p)
 
@@ -189,7 +194,8 @@ for(i in sample_types){
   # plot by genus
   chem_type_p[[paste0(i,"_genus")]] <- plot_ordination(a_phy, a_ord, color = "genus") +
                                                     stat_ellipse( level = 0.5) +
-                                                    theme(aspect.ratio = 1, legend.key.size = unit(0.5, "cm"))
+                                                    theme(aspect.ratio = 1, legend.key.size = unit(0.5, "cm"))+
+                                                    scale_color_manual(values = genus_cols)
   
   # calcluate permanovas for site
   chem_anovas[[paste0(i,"_site")]]<- do_permanova(a_phy, 
@@ -247,7 +253,8 @@ plot_ordination(micro_phy,
                 color = "sample_type",
                 shape = "site_name",
                 title = "All Microbe NMDS, Unifrac") +
-  scale_color_manual(values = sample_type_cols)
+  scale_color_manual(values = sample_type_cols)+
+  stat_ellipse(mapping = aes(shape = NULL))
 
 ggsave("output/NMDS/all_microbes_NMDS.pdf",width = 7, height = 5)
 
@@ -332,7 +339,8 @@ for(i in sample_types){
   # plot by genus
   micro_type_p[[paste0(i,"_genus")]] <- plot_ordination(a_phy, a_ord, color = "genus") +
                                                       stat_ellipse( level = 0.5) +
-                                                      theme(aspect.ratio = 1, legend.key.size = unit(0.5, "cm"))
+                                                      theme(aspect.ratio = 1, legend.key.size = unit(0.5, "cm"))+
+                                                      scale_color_manual(values = genus_cols)
                                                                                   
   # run permanovas for site
   micro_anovas[[paste0(i,"_site")]] <- do_permanova(
@@ -624,7 +632,7 @@ eul_plots$micro_limu <- euler_subset(micro_phy, group_by = "genus",
 # write out
 for(p in names(eul_plots)){
   pdf(paste0("output/Euler/", p, "_genus_euler.pdf"))
-  print(plot(eul_plots[[p]], quantities = T))
+  print(plot(eul_plots[[p]],fills = genus_cols, quantities = T))
   dev.off()
 }
 

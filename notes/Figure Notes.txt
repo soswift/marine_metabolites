@@ -1,0 +1,38 @@
+Marine Manuscript Figures
+
+1) Map and Photos
+1a Sat Map,1b elev map, 1c-K photos of sampled organisms
+Status: DONE, small tweaks
+TODO: get opinions, move around white space
+
+2) Euler Plots
+2a sample types, 2b macroalgae genera, 2c coral genera
+Status: DONE, small tweaks
+TODO: Uniform font with other figures
+
+3) Metabolite Ordination
+3a all samples by sample type, 3b corals ordination, 3c algae ordination
+Status: RECODE (Sean) and refine
+TODO: make all ordinations square and uniform font, drop outliers
+
+4) Metabolite Heatmap
+Significant metabolites highlighted by class and enrichment in sample types
+Status: RECODE (Craig) based on updated metabolite selection
+TODO: Decide on CLR transform and metabolite significance/abundance cutoff
+
+5) Metabolite Networks
+Networks showing significant association with sample type
+Status: RECODE (Helena) based on updated metabolite selection
+TODO: Decide on CLR transform and metabolite significance/abundance cutoff, write up new network descriptions
+
+6) Microbe Ordination
+6a all samples by sample type, 3b corals ordination, 3c algae ordination
+Status: RECODE (Sean) and refine
+TODO: make all ordinations square and uniform font, drop outliers
+
+7) Microbe heatmap
+Status: CODE
+TODO: decide on CLR and Run random forest/LM on microbe data to determine sample type enrichment
+
+
+

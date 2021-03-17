@@ -47,41 +47,24 @@ chem_dat  <- read.csv(metabolite_metadata_file,
 chem_dat$featureID <- row.names(chem_dat)
 
 
-# Read in vsurf results (Variable Importance scores)
-sample_type_vsurf <-readRDS("data/processed/sample_type_vsurf.rds")
-
+# Read in random forest results (Variable Importance scores)
 sample_type_RF <- readRDS("data/processed/sample_type_rf.rds")
 
-
 # Pull out importance scores for each metabolite
-# get the VSURF scores by index 
-# Note: extracting by index can be dangerous so be sure the VSURF scores were calculated from this exact abundance table
-all_metabolite_scores <-
-  data.table(featureID = colnames(abund_clean)[sample_type_vsurf$imp.mean.dec.ind],
-             VSURF_score = sample_type_vsurf$imp.mean.dec)
 # randomForest scores
-all_metabolite_scores[ , MeanDecreaseAccuracy := sample_type_RF$importance[featureID, "MeanDecreaseAccuracy" ]]
-
-all_metabolite_scores <-  merge(all_metabolite_scores,
-                                chem_dat, by = "featureID")
+rf_imp_scores <- as.data.table(sample_type_RF$importance, keep.rownames = T)
+setnames(rf_imp_scores, "rn", "featureID")
 
 # identify 'high scoring' metabolites based on randomForest scores higher than 2 Standard Deviation from mean
-high_metabolite_scores <- 
-  all_metabolite_scores[ MeanDecreaseAccuracy > mean(MeanDecreaseAccuracy) + 2*sd(MeanDecreaseAccuracy), ]
-
-HS_feats <- high_metabolite_scores$featureID
-
-# get abundance data and names for high scoring metabolites
-HS_abund <- norm_abund[ , colnames(norm_abund) %in% c(HS_feats, "sample_type", "site_name")]
-
+rf_imp_scores[ ,RF_selection :=
+                 ifelse(MeanDecreaseAccuracy > mean(MeanDecreaseAccuracy) + 2*sd(MeanDecreaseAccuracy),
+                 "Important", "Not Important"),]
 
 # write out
-write.csv(sample_type_RF$importance, "data/processed/all_metabolite_RF_importance.csv")
+fwrite(rf_imp_scores, "data/processed/all_metabolite_RF_importance.csv")
 write.csv(sample_type_RF$localImportance, "data/processed/all_metabolite_RF_local_importance.csv")
-fwrite(all_metabolite_scores, "data/processed/all_metabolite_vsurf_scores.csv")
-fwrite(high_metabolite_scores, "data/processed/high_metabolite_vsurf_scores.csv")
 
-
+# CLR Transform data prior to modelling -------------------------------------------------------------
 # Transform abundances out of the simplex
 # add a tiny number to all values in the abundance table
 minval <- min(abund_clean[abund_clean > 0])/2
@@ -146,7 +129,10 @@ summarize_lm <- function(i, lm.out){
 
 
 # get results for all features
-all_lm <- lapply(all_feats, summarize_lm, lm.out = lm.all)
+all_lm <- lapply(all_feats,
+                 summarize_lm,
+                 lm.out = lm.all)
+
 all_results <- do.call("rbind", all_lm)
 
 all_results <- merge(all_results,
@@ -171,11 +157,20 @@ dev.off()
 # Visually compare CLR transformed abundances between sample types for the most significantly different features
 
 # Calculate the mean CLR transformed relative abundance by sample type
-mean_clr_abund <- as.data.table(norm_abund)[ , lapply(.SD, mean), by = sample_type, .SDcols = !"site_name"]
-mean_clr_abund <- transpose(mean_clr_abund, keep.names = "featureID", make.names = "sample_type")
-setnames(mean_clr_abund, old = c("Limu","CCA","Coral"), c("Limu_MA","CCA_MA","Coral_MA"))
+mean_clr_abund <- as.data.table(norm_abund)[ ,
+                                             lapply(.SD, mean),
+                                             by = sample_type,
+                                             .SDcols = !"site_name"]
+mean_clr_abund <- transpose(mean_clr_abund,
+                            keep.names = "featureID",
+                            make.names = "sample_type")
+setnames(mean_clr_abund,
+         old = c("Limu","CCA","Coral"),
+         new = c("Limu_MA","CCA_MA","Coral_MA"))
 
-all_results <- merge(all_results, mean_clr_abund, by = "featureID")
+all_results <- merge(all_results,
+                     mean_clr_abund,
+                     by = "featureID")
 
 # classify each feature for 'enrichment' in a sample type or multiple sample types
 # enrichment is based on significance of tukeyHSD test and mean clr(relative abundance)
@@ -213,10 +208,11 @@ all_results$sample_type_DA <-
          classify_DA,
          FUN.VALUE = character(1))
 
-# identify features significantly correlated with sample type
+# randomly identify some features significantly correlated with sample type
 sig_feats <- as.character(sample(all_results$featureID[all_results$adj_p_val < 0.05], 20))
 sig_feats <- as.character(all_results[head(order(all_results$adj_p_val), n = 15), "featureID"])
 
+# plot boxplots to visually verify classification
 pdf("output/DA/example_DA.pdf")
 lapply(sig_feats, function(ft){
   formula_call <- as.formula(paste0(ft, " ~ sample_type")) 
@@ -227,75 +223,138 @@ lapply(sig_feats, function(ft){
 dev.off()
 
 # write out
-write.csv(all_results, "data/processed/all_metabolites_sample_type_anovas.csv", row.names = F)
+write.csv(all_results,
+          "data/processed/all_metabolites_sample_type_anovas.csv",
+          row.names = F)
 
+## Compare statistically (RF or CLR/LM) selected metabolites with MMVEC ordination --------------------------------------
 
-## Compare randomForest selected metabolites with MMVEC ordination --------------------------------------
 # RF identified metabolites that are important for classifying sample types
 # Do these metabolites also significantly separate out in the MMVEC ordination?
 source("src/biclust_helper_functions.R")
 
+# set color scheme for sample types
+sample_type_cols <- c(CCA       = "#6469ed",
+                      Coral     = "#e49c4c",
+                      Limu      = "#7cc854",
+                      CCALimu   = "#10f1f1",
+                      CoralLimu = "#e8f700",
+                      CoralCCA  = "#e20ef0")
+
+site_cols <- c(SharksCove       = "#440154FF",
+               ThreeTablesBeach = "#3B528BFF",
+               TwinRocks        = "#21908CFF", 
+               UppersBeach      = "#5DC863FF",
+               WaimeaBay        = "#FDE725FF")
+
+genus_cols <- c(# Limu
+  Jania =  "darkseagreen",
+  Halimeda = "green2",
+  Galaxaura = "darkgreen",
+  Other = "grey58",
+  # Coral
+  Pocillopora = "orange2",
+  Porites = "gold",
+  Monitipora = "khaki3")
+
 # read in RF importance scores and linear model results
-all_results <- fread("data/processed/all_metabolites_sample_type_anovas.csv")
+lm_results <- fread("data/processed/all_metabolites_sample_type_anovas.csv")
+lm_results[sample_type_DA == "NA", sample_type_DA := NA]
+
+rf_results <- fread("data/processed/all_metabolite_RF_importance.csv")
 
 # MMVEC ordination eigenvalues for microbes and metabolites
 mic_mmvec_ord <- fread("data/raw/mmvec/microbe_ordination.tsv") 
 met_mmvec_ord <- fread("data/raw/mmvec/metabolite_ordination.tsv") 
 
 # clean up microbe and feature names
-met_mmvec_ord[ ,featureID:= sub("metabolite", "id_", featureID) ]
-
-# check that features selected by RF are in the ordination
-all(HS_results$featureID %in% met_mmvec_ord$featureID)
-
-# merge ordination scores with RF/linear model information
-met_rf_ord <- merge(met_mmvec_ord, HS_results, by = "featureID", all.x = T)
-met_lm_ord <- merge(met_mmvec_ord, all_results, by = "featureID", all.x = T)
-
-# add columns that distinguish alpha and color
-# RF selected metabolites
-met_rf_ord$RF_selection <- ifelse(is.na(met_rf_ord$p_val), "Not selected", "Selected by RF")
-met_rf_ord$transp <- ifelse(is.na(met_rf_ord$p_val), 0.2, 0.8)
-
-# LM selected metabolites
-met_lm_ord$LM_selection <- ifelse(met_lm_ord$adj_p_val < 0.001 &
-                                    !is.na(met_lm_ord$adj_p_val) &
-                                    !is.na(met_lm_ord$sample_type_DA) &
-                                    any(met_lm_ord[, c("Coral_MA", "CCA_MA", "Limu_MA")] > 1),
-                                   yes = "Significant", no = "Not Significant")
-met_lm_ord$transp <- ifelse(met_lm_ord$LM_selection == "Not significant", 0.2 , 0.8)
+met_mmvec_ord[ ,featureID:= sub("metabolite",
+                                "id_",
+                                featureID) ]
 
 # remove outlier
-met_lm_ord <- met_lm_ord[met_lm_ord$Y < 0.05, ]
+met_mmvec_ord <- met_mmvec_ord[Y < 0.05, ]
 
-# plot the ordination with high RF scored metabolites
-p<- ggplot(data = met_rf_ord,
-           aes(x = X, y = Y, shape = RF_selection, col = sample_class))+
-  geom_point(alpha = met_rf_ord$transp) +
-  scale_shape_manual(values = c(1,19))+
+# check that features selected by RF are in the ordination
+all(rf_results$featureID %in% met_mmvec_ord$featureID)
+
+# merge ordination scores with RF/linear model information
+met_ord <- merge(met_mmvec_ord,
+                 lm_results,
+                 by = "featureID",
+                 all.x = T)
+met_ord <- merge(met_ord,
+                 rf_results,
+                 by = "featureID",
+                 all.x = T)
+
+# LM selected metabolites
+met_ord$LM_selection <- ifelse(met_ord$adj_p_val < 0.001 &
+                                    !is.na(met_ord$adj_p_val) &
+                                    !is.na(met_ord$sample_type_DA) &
+                                    any(met_ord[, c("Coral_MA", "CCA_MA", "Limu_MA")] > 1),
+                                yes = "Significant",
+                                no = "Not Significant")
+
+met_ord[ , transp:= ifelse(LM_selection == "Not Significant",
+                           0.2 ,
+                           0.8)]
+
+# plot the ordination with high RF scored metabolites highlighted
+p1 <- ggplot(data = met_ord,
+           aes(x = X, y = Y, color = RF_class))+
+  geom_point(alpha = met_ord$transp) +
   theme_minimal()
 
-p
+p1
+
 ggsave("output/randomforest/RF_variables_mmvec_biplot.pdf", 
        plot = p, width = 9, height = 8)
 
-# plot the ordination with LM significant metabolites filled and colored by sample type
-p2 <- ggplot(data = met_lm_ord,
-             aes(x = X, y = Y, shape = LM_selection, col = sample_type_DA))+
-  geom_point(alpha = met_lm_ord$transp) +
-  scale_shape_manual(values = c(1,19))+
+# plot the ordination with LM significant metabolites colored by sample type class
+# RF selected metabolites are filled
+p2 <- ggplot(data = met_ord,
+             aes(x = X, y = Y, shape = RF_selection, col = sample_type_DA))+
+  geom_point(alpha = met_ord$transp) +
+  scale_shape_manual(values = c(19,1))+
+  scale_color_manual(values = sample_type_cols, na.value = "gray")+
   theme_minimal()
 
-
 p2
+
 ggsave("output/randomforest/LM_variables_mmvec_biplot.pdf", 
        plot = p2, width = 9, height = 8)
 
 # plot the ordination with only LM significant metabolites shown
-p3 <- ggplot(data = met_lm_ord[met_lm_ord$LM_selection ==  "Significant",],
+p3 <- ggplot(data = met_ord[met_ord$LM_selection ==  "Significant",],
   aes(x = X, y = Y, shape = LM_selection, col = sample_type_DA))+
   geom_point() +
   theme_minimal()
 p3
 ggsave("output/randomforest/LM_variables_mmvec_biplot_only_significant.pdf", 
        plot = p3, width = 9, height = 8)
+
+# Test correlations of X, Y, and Z of ordination with sample type classification
+# For X axis
+x_met_lm_mod <- lm(X  ~ sample_type_DA, data = met_ord, na.action = na.omit)
+x_met_lm_aov <-anova(x_met_lm_mod)
+x_met_lm_aov
+
+# For Y axis
+y_met_lm_mod <- lm(Y  ~ sample_type_DA, data = met_ord, na.action = na.omit)
+y_met_lm_aov <-anova(y_met_lm_mod)
+y_met_lm_aov
+
+# For Z axis
+z_met_lm_mod <- lm(Z  ~ sample_type_DA, data = met_ord, na.action = na.omit)
+z_met_lm_aov <-anova(z_met_lm_mod)
+z_met_lm_aov
+
+
+# Check what classes of compounds were selected as important
+met_ord[RF_selection == "Important", .N, by = "Qemistree_class"]
+
+met_ord[RF_selection == "Important" & Qemistree_class == "Glycerophospholipids",featureID]
+
+fwrite(met_ord, "data/processed/all_metabolite_RF_LM_ord.csv")
+

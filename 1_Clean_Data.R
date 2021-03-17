@@ -239,6 +239,7 @@ physeq_csv_out(chem_phy_w_blanks,
                outdir = "data/processed/table_exports/")
 
 saveRDS(chem_phy, "data/processed/chem_phy.rds")
+saveRDS(chem_phy_w_blanks, "data/processed/chem_phy_w_blanks.rds")
 
 # clean up
 rm(chem_abund_w_blanks, 

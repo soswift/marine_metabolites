@@ -113,7 +113,7 @@ do_permanova <- function(phyloseq_obj, var_name, dist_obj, description){
 }
 
 
-# function plot_NMDS() will ordinate and plot a phylose object using a standard set of parameters
+# function plot_NMDS() will ordinate and plot a phyloseq object using a standard set of parameters
 plot_NMDS <- function(a_phy, desc,  color_var, shape_var=NULL, dist_obj, dist_method = "bray"){
   
   set.seed(1)
